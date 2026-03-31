@@ -42,6 +42,7 @@ pnpm tauri build
 ```
 
 The built application will be in `src-tauri/target/release/bundle/`.
+On Windows, the `pnpm tauri ...` commands can be run directly from PowerShell or `cmd` after Rust is installed.
 
 ### Run the Dashboard in a Browser
 

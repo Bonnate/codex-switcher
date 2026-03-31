@@ -9,10 +9,10 @@ function formatResetTime(resetAt: number | null | undefined): string {
   if (!resetAt) return "";
   const now = Math.floor(Date.now() / 1000);
   const diff = resetAt - now;
-  if (diff <= 0) return "now";
-  if (diff < 60) return `${diff}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  return `${Math.floor(diff / 3600)}h ${Math.floor((diff % 3600) / 60)}m`;
+  if (diff <= 0) return "지금";
+  if (diff < 60) return `${diff}초`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}분`;
+  return `${Math.floor(diff / 3600)}시간 ${Math.floor((diff % 3600) / 60)}분`;
 }
 
 function formatExactResetTime(resetAt: number | null | undefined): string {
@@ -30,10 +30,10 @@ function formatExactResetTime(resetAt: number | null | undefined): string {
 
 function formatWindowDuration(minutes: number | null | undefined): string {
   if (!minutes) return "";
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) return `${minutes}분`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
+  if (hours < 24) return `${hours}시간`;
+  return `${Math.floor(hours / 24)}일`;
 }
 
 function RateLimitBar({
@@ -67,8 +67,8 @@ function RateLimitBar({
       <div className="flex justify-between text-xs text-gray-500">
         <span>{label} {windowLabel && `(${windowLabel})`}</span>
         <span>
-          {remainingPercent.toFixed(0)}% left
-          {resetLabel && ` • resets ${resetLabel}`}
+          {remainingPercent.toFixed(0)}% 남음
+          {resetLabel && ` • ${resetLabel} 후 초기화`}
           {resetLabel && exactResetLabel && ` (${exactResetLabel})`}
         </span>
       </div>
@@ -87,7 +87,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     return (
       <div className="space-y-2">
         <div className="text-xs text-gray-400 italic animate-pulse">
-          Fetching usage...
+          사용량 불러오는 중...
         </div>
         <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden animate-pulse">
           <div className="h-full w-2/3 bg-gray-200"></div>
@@ -102,7 +102,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
   if (!usage) {
     return (
       <div className="text-xs text-gray-400 italic py-1 animate-pulse">
-        Fetching usage...
+        사용량 불러오는 중...
       </div>
     );
   }
@@ -121,7 +121,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
   if (!hasPrimary && !hasSecondary) {
     return (
       <div className="text-xs text-gray-400 italic py-1">
-        No rate limit data
+        사용량 제한 정보를 불러오지 못했습니다
       </div>
     );
   }
@@ -130,7 +130,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     <div className="space-y-2">
       {hasPrimary && (
         <RateLimitBar
-          label="5h Limit"
+          label="5시간 제한"
           usedPercent={usage.primary_used_percent!}
           windowMinutes={usage.primary_window_minutes}
           resetsAt={usage.primary_resets_at}
@@ -138,7 +138,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
       )}
       {hasSecondary && (
         <RateLimitBar
-          label="Weekly Limit"
+          label="주간 제한"
           usedPercent={usage.secondary_used_percent!}
           windowMinutes={usage.secondary_window_minutes}
           resetsAt={usage.secondary_resets_at}
@@ -146,7 +146,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
       )}
       {usage.credits_balance && (
         <div className="text-xs text-gray-500">
-          Credits: {usage.credits_balance}
+          크레딧: {usage.credits_balance}
         </div>
       )}
     </div>

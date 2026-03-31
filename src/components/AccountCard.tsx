@@ -17,13 +17,13 @@ interface AccountCardProps {
 }
 
 function formatLastRefresh(date: Date | null): string {
-  if (!date) return "Never";
+  if (!date) return "없음";
   const now = new Date();
   const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
-  if (diff < 5) return "Just now";
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 5) return "방금 전";
+  if (diff < 60) return `${diff}초 전`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}시간 전`;
   return date.toLocaleDateString();
 }
 
@@ -103,7 +103,7 @@ export function AccountCard({
     ? account.plan_type.charAt(0).toUpperCase() + account.plan_type.slice(1)
     : account.auth_mode === "api_key"
       ? "API Key"
-      : "Unknown";
+      : "알 수 없음";
 
   const planColors: Record<string, string> = {
     pro: "bg-indigo-50 text-indigo-700 border-indigo-200",
@@ -154,7 +154,11 @@ export function AccountCard({
                   setEditName(account.name);
                   setIsEditing(true);
                 }}
-                title={masked ? undefined : "Click to rename"}
+                title={
+                  masked
+                    ? undefined
+                    : "클릭해서 이 계정의 표시 이름을 바꿉니다.\n실제 OpenAI 계정 정보가 바뀌는 것은 아니고,\n이 앱 안에서만 보이는 이름이 변경됩니다."
+                }
               >
                 <BlurredText blur={masked}>{account.name}</BlurredText>
               </h3>
@@ -173,7 +177,11 @@ export function AccountCard({
             <button
               onClick={onToggleMask}
               className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-              title={masked ? "Show info" : "Hide info"}
+              title={
+                masked
+                  ? "이 계정의 이름과 이메일을 다시 보이게 합니다."
+                  : "이 계정의 이름과 이메일을 흐리게 숨깁니다.\n화면에는 남아 있지만 바로 읽기 어렵게 표시됩니다."
+              }
             >
               {masked ? (
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -203,7 +211,7 @@ export function AccountCard({
 
       {/* Last refresh time */}
       <div className="text-xs text-gray-400 mb-3">
-        Last updated: {formatLastRefresh(lastRefresh)}
+        마지막 갱신: {formatLastRefresh(lastRefresh)}
       </div>
 
       {/* Actions */}
@@ -213,7 +221,7 @@ export function AccountCard({
             disabled
             className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 text-gray-500 border border-gray-200 cursor-default"
           >
-            ✓ Active
+            ✓ 사용 중
           </button>
         ) : (
           <button
@@ -224,9 +232,13 @@ export function AccountCard({
                 ? "bg-gray-200 text-gray-400 cursor-not-allowed"
                 : "bg-gray-900 hover:bg-gray-800 text-white"
             }`}
-            title={switchDisabled ? "Close all Codex processes first" : undefined}
+            title={
+              switchDisabled
+                ? "현재 Codex 프로세스가 실행 중이라 전환할 수 없습니다.\n먼저 실행 중인 Codex 세션을 종료한 뒤 다시 시도하세요."
+                : "이 계정을 현재 활성 계정으로 전환합니다.\n전환되면 Codex CLI가 읽는 auth.json도 이 계정 기준으로 바뀝니다."
+            }
           >
-            {switching ? "Switching..." : switchDisabled ? "Codex Running" : "Switch"}
+            {switching ? "전환 중..." : switchDisabled ? "Codex 실행 중" : "전환"}
           </button>
         )}
         <button
@@ -239,7 +251,11 @@ export function AccountCard({
               ? "bg-amber-100 text-amber-500"
               : "bg-amber-50 hover:bg-amber-100 text-amber-700"
           }`}
-          title={warmingUp ? "Sending warm-up request..." : "Send minimal warm-up request"}
+          title={
+            warmingUp
+              ? "이 계정으로 워밍업 요청을 보내는 중입니다."
+              : "이 계정으로 아주 작은 워밍업 요청을 보냅니다.\n사용량 점검이나 상태 확인용 보조 기능입니다."
+          }
         >
           ⚡
         </button>
@@ -251,14 +267,17 @@ export function AccountCard({
               ? "bg-gray-200 text-gray-400"
               : "bg-gray-100 hover:bg-gray-200 text-gray-600"
           }`}
-          title="Refresh usage"
+          title="이 계정의 사용량 정보를 다시 조회합니다.
+5시간 제한, 주간 제한, 크레딧 표시를 최신 상태로 갱신합니다."
         >
           <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
         </button>
         <button
           onClick={onDelete}
           className="px-3 py-2 text-sm rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
-          title="Remove account"
+          title="이 계정을 Codex Switcher 목록에서 삭제합니다.
+실제 OpenAI 계정이 삭제되는 것은 아닙니다.
+삭제 확인을 위해 한 번 더 눌러야 적용됩니다."
         >
           ✕
         </button>

@@ -59,8 +59,10 @@ function App() {
   const [otherAccountsSort, setOtherAccountsSort] = useState<
     "deadline_asc" | "deadline_desc" | "remaining_desc" | "remaining_asc"
   >("deadline_asc");
-  const [isActionsMenuOpen, setIsActionsMenuOpen] = useState(false);
-  const actionsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const optionsMenuRef = useRef<HTMLDivElement | null>(null);
 
   const toggleMask = (accountId: string) => {
     setMaskedAccounts((prev) => {
@@ -113,18 +115,24 @@ function App() {
   }, [loadMaskedAccountIds]);
 
   useEffect(() => {
-    if (!isActionsMenuOpen) return;
+    if (!isAccountMenuOpen && !isOptionsMenuOpen) return;
 
     const handleClickOutside = (event: MouseEvent) => {
-      if (!actionsMenuRef.current) return;
-      if (!actionsMenuRef.current.contains(event.target as Node)) {
-        setIsActionsMenuOpen(false);
+      const target = event.target as Node;
+      const clickedAccountMenu = accountMenuRef.current?.contains(target);
+      const clickedOptionsMenu = optionsMenuRef.current?.contains(target);
+
+      if (!clickedAccountMenu) {
+        setIsAccountMenuOpen(false);
+      }
+      if (!clickedOptionsMenu) {
+        setIsOptionsMenuOpen(false);
       }
     };
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isActionsMenuOpen]);
+  }, [isAccountMenuOpen, isOptionsMenuOpen]);
 
   const handleSwitch = async (accountId: string) => {
     // Check processes before switching
@@ -207,25 +215,23 @@ function App() {
       setIsWarmingAll(true);
       const summary = await warmupAllAccounts();
       if (summary.total_accounts === 0) {
-        showWarmupToast("No accounts available for warm-up", true);
+        showWarmupToast("워밍업할 계정이 없습니다", true);
         return;
       }
 
       if (summary.failed_account_ids.length === 0) {
         showWarmupToast(
-          `Warm-up sent for all ${summary.warmed_accounts} account${
-            summary.warmed_accounts === 1 ? "" : "s"
-          }`
+          `총 ${summary.warmed_accounts}개 계정에 워밍업 요청을 보냈습니다`
         );
       } else {
         showWarmupToast(
-          `Warmed ${summary.warmed_accounts}/${summary.total_accounts}. Failed: ${summary.failed_account_ids.length}`,
+          `워밍업 성공 ${summary.warmed_accounts}/${summary.total_accounts}, 실패 ${summary.failed_account_ids.length}개`,
           true
         );
       }
     } catch (err) {
       console.error("Failed to warm up all accounts:", err);
-      showWarmupToast(`Warm-up all failed: ${formatWarmupError(err)}`, true);
+      showWarmupToast(`전체 워밍업 실패: ${formatWarmupError(err)}`, true);
     } finally {
       setIsWarmingAll(false);
     }
@@ -242,12 +248,12 @@ function App() {
       setIsExportingSlim(true);
       const payload = await exportAccountsSlimText();
       setConfigPayload(payload);
-      showWarmupToast(`Slim text exported (${accounts.length} accounts).`);
+      showWarmupToast(`간편 문자열 내보내기 완료 (${accounts.length}개 계정)`);
     } catch (err) {
       console.error("Failed to export slim text:", err);
       const message = err instanceof Error ? err.message : String(err);
       setConfigModalError(message);
-      showWarmupToast("Slim export failed", true);
+      showWarmupToast("간편 문자열 내보내기에 실패했습니다", true);
     } finally {
       setIsExportingSlim(false);
     }
@@ -263,7 +269,7 @@ function App() {
 
   const handleImportSlimText = async () => {
     if (!configPayload.trim()) {
-      setConfigModalError("Please paste the slim text string first.");
+      setConfigModalError("먼저 간편 문자열을 붙여넣으세요.");
       return;
     }
 
@@ -274,13 +280,13 @@ function App() {
       setMaskedAccounts(new Set());
       setIsConfigModalOpen(false);
       showWarmupToast(
-        `Imported ${summary.imported_count}, skipped ${summary.skipped_count} (total ${summary.total_in_payload})`
+        `가져오기 완료: ${summary.imported_count}개 추가, ${summary.skipped_count}개 건너뜀 (총 ${summary.total_in_payload}개)`
       );
     } catch (err) {
       console.error("Failed to import slim text:", err);
       const message = err instanceof Error ? err.message : String(err);
       setConfigModalError(message);
-      showWarmupToast("Slim import failed", true);
+      showWarmupToast("간편 문자열 가져오기에 실패했습니다", true);
     } finally {
       setIsImportingSlim(false);
     }
@@ -291,10 +297,10 @@ function App() {
       setIsExportingFull(true);
       const exported = await exportFullBackupFile();
       if (!exported) return;
-      showWarmupToast("Full encrypted file exported.");
+      showWarmupToast("백업 파일을 만들었습니다.");
     } catch (err) {
       console.error("Failed to export full encrypted file:", err);
-      showWarmupToast("Full export failed", true);
+      showWarmupToast("백업 파일 생성에 실패했습니다", true);
     } finally {
       setIsExportingFull(false);
     }
@@ -310,11 +316,11 @@ function App() {
       const maskedIds = await loadMaskedAccountIds();
       setMaskedAccounts(new Set(maskedIds));
       showWarmupToast(
-        `Imported ${summary.imported_count}, skipped ${summary.skipped_count} (total ${summary.total_in_payload})`
+        `복원 완료: ${summary.imported_count}개 추가, ${summary.skipped_count}개 건너뜀 (총 ${summary.total_in_payload}개)`
       );
     } catch (err) {
       console.error("Failed to import full encrypted file:", err);
-      showWarmupToast("Full import failed", true);
+      showWarmupToast("백업 복원에 실패했습니다", true);
     } finally {
       setIsImportingFull(false);
     }
@@ -323,6 +329,7 @@ function App() {
   const activeAccount = accounts.find((a) => a.is_active);
   const otherAccounts = accounts.filter((a) => !a.is_active);
   const hasRunningProcesses = processInfo && processInfo.count > 0;
+  const hasAccounts = accounts.length > 0;
 
   const sortedOtherAccounts = useMemo(() => {
     const getResetDeadline = (resetAt: number | null | undefined) =>
@@ -395,14 +402,14 @@ function App() {
                       ></span>
                       <span>
                         {hasRunningProcesses
-                          ? `${processInfo.count} Codex running`
-                          : "0 Codex running"}
+                          ? `Codex ${processInfo.count}개 실행 중`
+                          : "Codex 실행 중 아님"}
                       </span>
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-gray-500">
-                  Multi-account manager for Codex CLI
+                  Codex CLI 멀티 계정 관리자
                 </p>
               </div>
             </div>
@@ -411,7 +418,11 @@ function App() {
               <button
                 onClick={toggleMaskAll}
                 className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors shrink-0 whitespace-nowrap"
-                title={allMasked ? "Show all account names and emails" : "Hide all account names and emails"}
+                title={
+                  allMasked
+                    ? "모든 계정 이름과 이메일을 다시 표시합니다.\n가려 둔 정보가 한 번에 모두 보이도록 전환됩니다."
+                    : "모든 계정 이름과 이메일을 흐리게 숨깁니다.\n화면 공유 중이거나 주변에 사람이 있을 때 빠르게 가릴 수 있습니다."
+                }
               >
                 <span className="flex items-center gap-2">
                   {allMasked ? (
@@ -429,90 +440,127 @@ function App() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                     </svg>
                   )}
-                  {allMasked ? "Show All" : "Hide All"}
+                  {allMasked ? "전체 보기" : "전체 숨기기"}
                 </span>
               </button>
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap"
+                title="등록된 모든 계정의 사용량 정보를 다시 조회합니다.
+5시간 제한, 주간 제한, 크레딧 정보가 최신 값으로 갱신됩니다."
               >
-                {isRefreshing ? "↻ Refreshing..." : "↻ Refresh All"}
+                {isRefreshing ? "↻ 새로고침 중..." : "↻ 전체 새로고침"}
               </button>
               <button
                 onClick={handleWarmupAll}
                 disabled={isWarmingAll || accounts.length === 0}
                 className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap"
-                title="Send minimal traffic using all accounts"
+                title="모든 계정으로 아주 작은 워밍업 요청을 보냅니다.
+계정 상태를 한 번 깨우거나 점검할 때 쓰는 보조 기능입니다.
+계정 전환에 꼭 필요한 기능은 아닙니다."
               >
                 {isWarmingAll ? (
                   <span className="flex items-center gap-2">
-                    <span className="animate-pulse">⚡</span> Warming...
+                    <span className="animate-pulse">⚡</span> 워밍업 중...
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
-                    <span>⚡</span> Warm-up All
+                    <span>⚡</span> 전체 워밍업
                   </span>
                 )}
               </button>
 
-              <div className="relative" ref={actionsMenuRef}>
+              <div className="relative" ref={accountMenuRef}>
                 <button
-                  onClick={() => setIsActionsMenuOpen((prev) => !prev)}
+                  onClick={() => {
+                    setIsAccountMenuOpen((prev) => !prev);
+                    setIsOptionsMenuOpen(false);
+                  }}
                   className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors shrink-0 whitespace-nowrap"
+                  title="계정 관련 메뉴를 엽니다.
+새 계정 추가 같은 기능이 들어 있습니다."
                 >
-                  Account ▾
+                  계정 ▾
                 </button>
-                {isActionsMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
+                {isAccountMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-48 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
                     <button
                       onClick={() => {
-                        setIsActionsMenuOpen(false);
+                        setIsAccountMenuOpen(false);
                         setIsAddModalOpen(true);
                       }}
                       className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                      title="새 ChatGPT 계정을 로그인으로 추가하거나
+기존 auth.json 파일에서 계정을 가져옵니다."
                     >
-                      + Add Account
+                      + 계정 추가
                     </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="relative" ref={optionsMenuRef}>
+                <button
+                  onClick={() => {
+                    setIsOptionsMenuOpen((prev) => !prev);
+                    setIsAccountMenuOpen(false);
+                  }}
+                  className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors shrink-0 whitespace-nowrap"
+                  title="백업, 텍스트로 계정 이동, 기타 보조 기능 메뉴를 엽니다."
+                >
+                  옵션 ▾
+                </button>
+                {isOptionsMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
                     <button
                       onClick={() => {
-                        setIsActionsMenuOpen(false);
+                        setIsOptionsMenuOpen(false);
                         void handleExportSlimText();
                       }}
                       disabled={isExportingSlim}
                       className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      title="등록된 계정을 긴 텍스트 형태로 내보냅니다.
+파일 없이 다른 기기로 옮길 때 쓸 수 있지만 민감 정보가 포함되므로 주의가 필요합니다."
                     >
-                      {isExportingSlim ? "Exporting..." : "Export Slim Text"}
+                      {isExportingSlim ? "문자열 만드는 중..." : "텍스트로 계정 내보내기"}
                     </button>
                     <button
                       onClick={() => {
-                        setIsActionsMenuOpen(false);
+                        setIsOptionsMenuOpen(false);
                         openImportSlimTextModal();
                       }}
                       disabled={isImportingSlim}
                       className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      title="다른 기기에서 내보낸 계정 텍스트를 붙여넣어 가져옵니다.
+기존 계정은 유지하고, 없는 계정만 추가합니다."
                     >
-                      {isImportingSlim ? "Importing..." : "Import Slim Text"}
+                      {isImportingSlim ? "불러오는 중..." : "텍스트로 계정 가져오기"}
                     </button>
                     <button
                       onClick={() => {
-                        setIsActionsMenuOpen(false);
+                        setIsOptionsMenuOpen(false);
                         void handleExportFullFile();
                       }}
-                      disabled={isExportingFull}
+                      disabled={isExportingFull || !hasAccounts}
                       className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      title="현재 등록된 계정 목록과 활성 계정 상태를
+.cswf 백업 파일로 저장합니다.
+다른 PC로 옮길 때 가장 권장되는 방식입니다."
                     >
-                      {isExportingFull ? "Exporting..." : "Export Full Encrypted File"}
+                      {isExportingFull ? "백업 만드는 중..." : "백업 파일 만들기"}
                     </button>
                     <button
                       onClick={() => {
-                        setIsActionsMenuOpen(false);
+                        setIsOptionsMenuOpen(false);
                         void handleImportFullFile();
                       }}
                       disabled={isImportingFull}
                       className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      title=".cswf 백업 파일을 읽어 현재 기기에 계정을 복원합니다.
+이미 있는 계정은 유지하고, 없는 계정만 병합해서 추가합니다."
                     >
-                      {isImportingFull ? "Importing..." : "Import Full Encrypted File"}
+                      {isImportingFull ? "복원 중..." : "백업 파일 복원"}
                     </button>
                   </div>
                 )}
@@ -527,11 +575,11 @@ function App() {
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 border-t-transparent rounded-full mb-4"></div>
-            <p className="text-gray-500">Loading accounts...</p>
+            <p className="text-gray-500">계정을 불러오는 중...</p>
           </div>
         ) : error ? (
           <div className="text-center py-20">
-            <div className="text-red-600 mb-2">Failed to load accounts</div>
+            <div className="text-red-600 mb-2">계정을 불러오지 못했습니다</div>
             <p className="text-sm text-gray-500">{error}</p>
           </div>
         ) : accounts.length === 0 ? (
@@ -540,17 +588,28 @@ function App() {
               <span className="text-3xl">👤</span>
             </div>
             <h2 className="text-xl font-semibold text-gray-900 mb-2">
-              No accounts yet
+              아직 등록된 계정이 없습니다
             </h2>
             <p className="text-gray-500 mb-6">
-              Add your first Codex account to get started
+              첫 Codex 계정을 추가하거나 백업 파일을 복원하세요
             </p>
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="px-6 py-3 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
-            >
-              Add Account
-            </button>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={() => setIsAddModalOpen(true)}
+                className="px-6 py-3 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+              >
+                계정 추가
+              </button>
+              <button
+                onClick={() => {
+                  void handleImportFullFile();
+                }}
+                disabled={isImportingFull}
+                className="px-6 py-3 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50"
+              >
+                {isImportingFull ? "복원 중..." : "백업 복원"}
+              </button>
+            </div>
           </div>
         ) : (
           <div className="space-y-8">
@@ -558,7 +617,7 @@ function App() {
             {activeAccount && (
               <section>
                 <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">
-                  Active Account
+                  현재 사용 중인 계정
                 </h2>
                 <AccountCard
                   account={activeAccount}
@@ -583,11 +642,11 @@ function App() {
               <section>
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider">
-                    Other Accounts ({otherAccounts.length})
+                    다른 계정 ({otherAccounts.length})
                   </h2>
                   <div className="flex items-center gap-2">
                     <label htmlFor="other-accounts-sort" className="text-xs text-gray-500">
-                      Sort
+                      정렬
                     </label>
                     <div className="relative">
                       <select
@@ -604,13 +663,13 @@ function App() {
                         }
                         className="appearance-none font-sans text-xs sm:text-sm font-medium pl-3 pr-9 py-2 rounded-xl border border-gray-300 bg-gradient-to-b from-white to-gray-50 text-gray-700 shadow-sm hover:border-gray-400 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-gray-400 transition-all"
                       >
-                        <option value="deadline_asc">Reset: earliest to latest</option>
-                        <option value="deadline_desc">Reset: latest to earliest</option>
+                        <option value="deadline_asc">리셋 빠른 순</option>
+                        <option value="deadline_desc">리셋 늦은 순</option>
                         <option value="remaining_desc">
-                          % remaining: highest to lowest
+                          남은 비율 높은 순
                         </option>
                         <option value="remaining_asc">
-                          % remaining: lowest to highest
+                          남은 비율 낮은 순
                         </option>
                       </select>
                       <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
@@ -656,7 +715,7 @@ function App() {
       {/* Refresh Success Toast */}
       {refreshSuccess && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-3 bg-green-600 text-white rounded-lg shadow-lg text-sm flex items-center gap-2">
-          <span>✓</span> Usage refreshed successfully
+          <span>✓</span> 사용량을 새로고침했습니다
         </div>
       )}
 
@@ -676,7 +735,7 @@ function App() {
       {/* Delete Confirmation Toast */}
       {deleteConfirmId && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-3 bg-red-600 text-white rounded-lg shadow-lg text-sm">
-          Click delete again to confirm removal
+          삭제하려면 한 번 더 누르세요
         </div>
       )}
 
@@ -696,7 +755,7 @@ function App() {
           <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-2xl mx-4 shadow-xl">
             <div className="flex items-center justify-between p-5 border-b border-gray-100">
               <h2 className="text-lg font-semibold text-gray-900">
-                {configModalMode === "slim_export" ? "Export Slim Text" : "Import Slim Text"}
+                {configModalMode === "slim_export" ? "텍스트로 계정 내보내기" : "텍스트로 계정 가져오기"}
               </h2>
               <button
                 onClick={() => setIsConfigModalOpen(false)}
@@ -708,11 +767,11 @@ function App() {
             <div className="p-5 space-y-4">
               {configModalMode === "slim_import" ? (
                 <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                  Existing accounts are kept. Only missing accounts are imported.
+                  기존 계정은 그대로 두고, 없는 계정만 텍스트에서 추가로 가져옵니다.
                 </p>
               ) : (
                 <p className="text-sm text-gray-500">
-                  This slim string contains account secrets. Keep it private.
+                  이 텍스트에는 계정 인증 정보가 들어 있습니다. 메신저나 메모장에 남기지 말고 바로 옮기는 용도로만 사용하세요.
                 </p>
               )}
               <textarea
@@ -722,9 +781,9 @@ function App() {
                 placeholder={
                   configModalMode === "slim_export"
                     ? isExportingSlim
-                      ? "Generating..."
-                      : "Export string will appear here"
-                    : "Paste config string here"
+                      ? "생성 중..."
+                      : "내보낸 계정 텍스트가 여기에 표시됩니다"
+                    : "가져올 계정 텍스트를 여기에 붙여넣으세요"
                 }
                 className="w-full h-48 px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 font-mono"
               />
@@ -739,7 +798,7 @@ function App() {
                 onClick={() => setIsConfigModalOpen(false)}
                 className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
               >
-                Close
+                닫기
               </button>
               {configModalMode === "slim_export" ? (
                 <button
@@ -750,13 +809,13 @@ function App() {
                       setConfigCopied(true);
                       setTimeout(() => setConfigCopied(false), 1500);
                     } catch {
-                      setConfigModalError("Clipboard unavailable. Please copy manually.");
+                      setConfigModalError("클립보드를 사용할 수 없습니다. 직접 복사하세요.");
                     }
                   }}
                   disabled={!configPayload || isExportingSlim}
                   className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors disabled:opacity-50"
                 >
-                  {configCopied ? "Copied" : "Copy String"}
+                  {configCopied ? "복사됨" : "텍스트 복사"}
                 </button>
               ) : (
                 <button
@@ -764,7 +823,7 @@ function App() {
                   disabled={isImportingSlim}
                   className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors disabled:opacity-50"
                 >
-                  {isImportingSlim ? "Importing..." : "Import Missing Accounts"}
+                  {isImportingSlim ? "불러오는 중..." : "없는 계정만 추가"}
                 </button>
               )}
             </div>

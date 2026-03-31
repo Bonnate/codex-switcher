@@ -49,7 +49,7 @@ export async function pickAuthJsonFile(): Promise<FileSource | null> {
     const selected = await open({
       multiple: false,
       filters: [{ name: "JSON", extensions: ["json"] }],
-      title: "Select auth.json file",
+      title: "auth.json 파일 선택",
     });
 
     if (!selected || Array.isArray(selected)) return null;
@@ -63,8 +63,8 @@ export async function exportFullBackupFile(): Promise<boolean> {
   if (isTauriRuntime()) {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const selected = await save({
-      title: "Export Full Encrypted Account Config",
-      defaultPath: "codex-switcher-full.cswf",
+      title: "Codex Switcher 백업 만들기",
+      defaultPath: buildBackupFilename(),
       filters: [{ name: "Codex Switcher Full Backup", extensions: ["cswf"] }],
     });
 
@@ -87,7 +87,7 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
       multiple: false,
-      title: "Import Full Encrypted Account Config",
+      title: "Codex Switcher 백업 복원",
       filters: [{ name: "Codex Switcher Full Backup", extensions: ["cswf"] }],
     });
 
@@ -107,7 +107,7 @@ export async function importFullBackupFile(): Promise<ImportAccountsSummary | nu
 }
 
 export function describeFileSource(source: FileSource | null): string {
-  if (!source) return "No file selected";
+  if (!source) return "선택된 파일 없음";
   return typeof source === "string" ? source : source.name;
 }
 
@@ -121,6 +121,18 @@ async function fileToBase64(file: File): Promise<string> {
   }
 
   return window.btoa(binary);
+}
+
+function buildBackupFilename(): string {
+  const now = new Date();
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+  ].join("") + "-" + [pad(now.getHours()), pad(now.getMinutes()), pad(now.getSeconds())].join("");
+
+  return `codex-switcher-backup-${stamp}.cswf`;
 }
 
 function downloadBase64File(

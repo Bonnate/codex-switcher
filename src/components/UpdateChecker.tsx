@@ -102,7 +102,7 @@ export function UpdateChecker() {
           <div className="flex items-start gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-900">
-                Update available: v{status.update.version}
+                업데이트 उपलब्ध: v{status.update.version}
               </p>
               {status.update.body && (
                 <p className="text-xs text-gray-500 mt-0.5 truncate">
@@ -115,13 +115,13 @@ export function UpdateChecker() {
                 onClick={() => setDismissed(true)}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
               >
-                Later
+                나중에
               </button>
               <button
                 onClick={handleDownloadAndInstall}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
               >
-                Update
+                업데이트
               </button>
             </div>
           </div>
@@ -130,7 +130,7 @@ export function UpdateChecker() {
         {status.kind === "downloading" && (
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-900">Downloading update...</p>
+              <p className="text-sm font-medium text-gray-900">업데이트 다운로드 중...</p>
               <p className="text-xs text-gray-500">
                 {formatBytes(status.downloaded)}
                 {status.total ? ` / ${formatBytes(status.total)}` : ""}
@@ -153,20 +153,20 @@ export function UpdateChecker() {
         {status.kind === "ready" && (
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-gray-900">
-              Update ready. Restart to apply.
+              업데이트 준비가 끝났습니다. 다시 시작해 적용하세요.
             </p>
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={() => setDismissed(true)}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
               >
-                Later
+                나중에
               </button>
               <button
                 onClick={handleRelaunch}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
               >
-                Restart
+                다시 시작
               </button>
             </div>
           </div>
@@ -175,13 +175,13 @@ export function UpdateChecker() {
         {status.kind === "error" && (
           <div className="flex items-center justify-between">
             <p className="text-sm text-red-600">
-              Update failed: {status.message}
+              업데이트에 실패했습니다: {status.message}
             </p>
             <button
               onClick={() => setDismissed(true)}
               className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors shrink-0 ml-2"
             >
-              Dismiss
+              닫기
             </button>
           </div>
         )}
