@@ -43,6 +43,7 @@ pnpm tauri build
 
 The built application will be in `src-tauri/target/release/bundle/`.
 On Windows, the `pnpm tauri ...` commands can be run directly from PowerShell or `cmd` after Rust is installed.
+On macOS, `./build-macos.sh` builds the `.app` bundle and falls back gracefully when updater signing keys are not configured, and `./run-macos.sh` launches the detected artifact. Finder double-click launchers are also available as `build-macos.command` and `run-macos.command`.
 
 ### Run the Dashboard in a Browser
 

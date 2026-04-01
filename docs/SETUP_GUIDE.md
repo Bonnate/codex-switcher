@@ -161,7 +161,9 @@ pnpm lan
 CODEX_SWITCHER_WEB_PORT=4000 pnpm lan
 ```
 
-## 5. Windows용 실행 파일 빌드
+## 5. 릴리스 빌드
+
+### 5-1. Windows용 실행 파일 빌드
 
 이 프로젝트는 서버 없이 단독 실행되는 Windows용 `exe`를 만들 수 있습니다.
 
@@ -192,6 +194,46 @@ src-tauri\target\release\codex-switcher.exe
 - 이 `exe`는 별도 서버 없이 단독 실행됩니다
 - `cargo build --release`만으로 만든 실행 파일은 Tauri 설정이 제대로 반영되지 않을 수 있으므로 권장하지 않습니다
 - 설치형 `setup.exe` / `.msi`가 꼭 필요하면 별도 서명 설정을 추가한 뒤 `pnpm tauri build`를 사용해야 합니다
+
+### 5-2. macOS용 실행 파일 빌드
+
+macOS에서는 `.app` 번들을 우선 빌드하고, 업데이터 서명키가 없어도 앱 번들이 생성된 경우 그대로 사용할 수 있습니다.
+
+권장 방법:
+```bash
+chmod +x build-macos.sh run-macos.sh build-macos.command run-macos.command
+./build-macos.sh
+```
+
+직접 명령으로 실행하면:
+```bash
+node ./scripts/tauri.mjs build
+```
+
+주요 출력 위치:
+- `src-tauri/target/release/codex-switcher`
+- `src-tauri/target/release/bundle/macos/Codex Switcher.app`
+
+실행:
+```bash
+./run-macos.sh
+```
+
+또는:
+```bash
+src-tauri/target/release/codex-switcher
+```
+
+Finder에서 더블클릭으로 실행하려면:
+- `build-macos.command`
+- `run-macos.command`
+
+참고:
+- `build-macos.sh`는 빌드 후 감지된 산출물 경로를 출력합니다
+- `.app` 번들이 생성된 경우 `run-macos.sh`는 `open`으로 실행합니다
+- 업데이터 공개키만 있고 개인키가 없으면 업데이터 아티팩트 서명은 건너뛰지만 `.app` 번들은 그대로 사용할 수 있습니다
+- `.command` 파일은 실행 후 Enter를 누를 때까지 터미널 창을 유지합니다
+- `cargo build --release`만으로 만든 실행 파일은 Tauri 설정이 제대로 반영되지 않을 수 있으므로 권장하지 않습니다
 
 ## 6. 계정 데이터 위치
 
