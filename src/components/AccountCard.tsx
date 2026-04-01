@@ -19,6 +19,8 @@ interface AccountCardProps {
   masked?: boolean;
   privacyMode?: "full" | "blur" | "prefix3";
   showCredits?: boolean;
+  showMaskToggle?: boolean;
+  showPlanBadge?: boolean;
   onToggleMask?: () => void;
 }
 
@@ -69,6 +71,8 @@ export function AccountCard({
   masked = false,
   privacyMode = "full",
   showCredits = true,
+  showMaskToggle = true,
+  showPlanBadge = true,
   onToggleMask,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -196,8 +200,9 @@ export function AccountCard({
             )}
           </div>
 
-          <div className="flex items-center gap-2 rounded-full border border-[rgba(176,188,235,0.42)] bg-[rgba(255,255,255,0.68)] px-2 py-1 shadow-[0_8px_18px_rgba(126,141,204,0.08)] backdrop-blur-md">
-            {onToggleMask && (
+          {(showMaskToggle || showPlanBadge) && (
+            <div className="flex items-center gap-2 rounded-full border border-[rgba(176,188,235,0.42)] bg-[rgba(255,255,255,0.68)] px-2 py-1 shadow-[0_8px_18px_rgba(126,141,204,0.08)] backdrop-blur-md">
+            {showMaskToggle && onToggleMask && (
               <button
                 onClick={onToggleMask}
                 className="rounded-full p-1 text-[var(--text-soft)] transition-colors hover:bg-[rgba(236,241,255,0.82)] hover:text-[var(--primary-strong)]"
@@ -219,12 +224,15 @@ export function AccountCard({
                 )}
               </button>
             )}
-            <span
-              className={`rounded-full border px-2.5 py-1 text-xs font-medium shadow-sm ${planColorClass}`}
-            >
-              {planDisplay}
-            </span>
+            {showPlanBadge && (
+              <span
+                className={`rounded-full border px-2.5 py-1 text-xs font-medium shadow-sm ${planColorClass}`}
+              >
+                {planDisplay}
+              </span>
+            )}
           </div>
+          )}
         </div>
       </div>
 

@@ -8,10 +8,13 @@ import type {
 } from "../types";
 import { invokeBackend, type FileSource } from "../lib/platform";
 
+export const USAGE_AUTO_REFRESH_INTERVAL_MS = 60000;
+
 export function useAccounts() {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nextAutoRefreshAt, setNextAutoRefreshAt] = useState<number | null>(null);
   const accountsRef = useRef<AccountWithUsage[]>([]);
   const maxConcurrentUsageRequests = 10;
 
@@ -365,11 +368,13 @@ export function useAccounts() {
 
   useEffect(() => {
     loadAccounts().then((accountList) => refreshUsage(accountList));
+    setNextAutoRefreshAt(Date.now() + USAGE_AUTO_REFRESH_INTERVAL_MS);
     
     // Auto-refresh usage every 60 seconds (same as official Codex CLI)
     const interval = setInterval(() => {
+      setNextAutoRefreshAt(Date.now() + USAGE_AUTO_REFRESH_INTERVAL_MS);
       refreshUsage().catch(() => {});
-    }, 60000);
+    }, USAGE_AUTO_REFRESH_INTERVAL_MS);
     
     return () => clearInterval(interval);
   }, [loadAccounts, refreshUsage]);
@@ -378,6 +383,7 @@ export function useAccounts() {
     accounts,
     loading,
     error,
+    nextAutoRefreshAt,
     loadAccounts,
     refreshUsage,
     refreshSingleUsage,

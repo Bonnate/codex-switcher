@@ -169,7 +169,7 @@ CODEX_SWITCHER_WEB_PORT=4000 pnpm lan
 
 권장 방법:
 ```powershell
-build-exe.cmd
+build-windows.cmd
 ```
 
 직접 명령으로 실행하면:
@@ -182,7 +182,7 @@ pnpm tauri build --no-bundle
 
 실행:
 ```powershell
-run-exe.cmd
+run-windows.cmd
 ```
 
 또는:
@@ -192,6 +192,7 @@ src-tauri\target\release\codex-switcher.exe
 
 참고:
 - 이 `exe`는 별도 서버 없이 단독 실행됩니다
+- 기존 `build-exe.cmd`, `run-exe.cmd`도 같은 동작으로 유지됩니다
 - `cargo build --release`만으로 만든 실행 파일은 Tauri 설정이 제대로 반영되지 않을 수 있으므로 권장하지 않습니다
 - 설치형 `setup.exe` / `.msi`가 꼭 필요하면 별도 서명 설정을 추가한 뒤 `pnpm tauri build`를 사용해야 합니다
 

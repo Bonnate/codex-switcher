@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useAccounts } from "./hooks/useAccounts";
+import { USAGE_AUTO_REFRESH_INTERVAL_MS, useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
 import { getExhaustedRateLimits } from "./components/UsageBar";
 import type { CodexProcessInfo } from "./types";
@@ -25,6 +25,8 @@ type PrivacyMode = "full" | "blur" | "prefix3";
 type PrivacySettings = {
   mode: PrivacyMode;
   showCredits: boolean;
+  showMaskToggle: boolean;
+  showPlanBadge: boolean;
 };
 
 const DEFAULT_USAGE_ALERT_SETTINGS: UsageAlertSettings = {
@@ -46,6 +48,7 @@ function App() {
     accounts,
     loading,
     error,
+    nextAutoRefreshAt,
     loadAccounts,
     refreshUsage,
     refreshSingleUsage,
@@ -85,6 +88,10 @@ function App() {
   const [draftPrivacyMode, setDraftPrivacyMode] = useState<PrivacyMode>("full");
   const [showCredits, setShowCredits] = useState(true);
   const [draftShowCredits, setDraftShowCredits] = useState(true);
+  const [showMaskToggle, setShowMaskToggle] = useState(true);
+  const [draftShowMaskToggle, setDraftShowMaskToggle] = useState(true);
+  const [showPlanBadge, setShowPlanBadge] = useState(true);
+  const [draftShowPlanBadge, setDraftShowPlanBadge] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [forceSwitchTarget, setForceSwitchTarget] = useState<{
     id: string;
@@ -100,6 +107,7 @@ function App() {
   const [isWarmingAll, setIsWarmingAll] = useState(false);
   const [warmingUpId, setWarmingUpId] = useState<string | null>(null);
   const [refreshSuccess, setRefreshSuccess] = useState(false);
+  const [refreshCountdownNow, setRefreshCountdownNow] = useState(() => Date.now());
   const [warmupToast, setWarmupToast] = useState<{
     message: string;
     isError: boolean;
@@ -179,15 +187,28 @@ function App() {
       const raw = window.localStorage.getItem(PRIVACY_SETTINGS_KEY);
       if (!raw) return;
 
-      const parsed = JSON.parse(raw) as { mode?: unknown; showCredits?: unknown };
+      const parsed = JSON.parse(raw) as {
+        mode?: unknown;
+        showCredits?: unknown;
+        showMaskToggle?: unknown;
+        showPlanBadge?: unknown;
+      };
       const nextMode = isPrivacyMode(parsed.mode) ? parsed.mode : "full";
       const nextShowCredits =
         typeof parsed.showCredits === "boolean" ? parsed.showCredits : true;
+      const nextShowMaskToggle =
+        typeof parsed.showMaskToggle === "boolean" ? parsed.showMaskToggle : true;
+      const nextShowPlanBadge =
+        typeof parsed.showPlanBadge === "boolean" ? parsed.showPlanBadge : true;
 
       setPrivacyMode(nextMode);
       setDraftPrivacyMode(nextMode);
       setShowCredits(nextShowCredits);
       setDraftShowCredits(nextShowCredits);
+      setShowMaskToggle(nextShowMaskToggle);
+      setDraftShowMaskToggle(nextShowMaskToggle);
+      setShowPlanBadge(nextShowPlanBadge);
+      setDraftShowPlanBadge(nextShowPlanBadge);
     } catch (err) {
       console.error("Failed to load privacy settings:", err);
     }
@@ -286,10 +307,14 @@ function App() {
   const savePrivacySettings = () => {
     setPrivacyMode(draftPrivacyMode);
     setShowCredits(draftShowCredits);
+    setShowMaskToggle(draftShowMaskToggle);
+    setShowPlanBadge(draftShowPlanBadge);
     if (typeof window !== "undefined") {
       const nextSettings: PrivacySettings = {
         mode: draftPrivacyMode,
         showCredits: draftShowCredits,
+        showMaskToggle: draftShowMaskToggle,
+        showPlanBadge: draftShowPlanBadge,
       };
       window.localStorage.setItem(PRIVACY_SETTINGS_KEY, JSON.stringify(nextSettings));
     }
@@ -629,6 +654,22 @@ function App() {
     [sortedOtherAccounts]
   );
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setRefreshCountdownNow(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const nextRefreshInSeconds = useMemo(() => {
+    if (!nextAutoRefreshAt) {
+      return Math.ceil(USAGE_AUTO_REFRESH_INTERVAL_MS / 1000);
+    }
+
+    return Math.max(0, Math.ceil((nextAutoRefreshAt - refreshCountdownNow) / 1000));
+  }, [nextAutoRefreshAt, refreshCountdownNow]);
+
   return (
     <div className="app-shell">
       {/* Header */}
@@ -669,16 +710,21 @@ function App() {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 shrink-0 md:ml-4 md:w-max md:flex-nowrap md:justify-end">
-              <button
-                onClick={handleRefresh}
-                disabled={isRefreshing}
-                className="btn-base btn-secondary h-11 shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium"
-                title="등록된 모든 계정의 사용량 정보를 다시 조회합니다.
+            <div className="flex flex-wrap items-start gap-2 shrink-0 md:ml-4 md:w-max md:flex-nowrap md:justify-end">
+              <div className="flex flex-col items-center gap-1 shrink-0">
+                <button
+                  onClick={handleRefresh}
+                  disabled={isRefreshing}
+                  className="btn-base btn-secondary h-11 shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium"
+                  title="등록된 모든 계정의 사용량 정보를 다시 조회합니다.
 5시간 제한, 주간 제한, 크레딧 정보가 최신 값으로 갱신됩니다."
-              >
-                {isRefreshing ? "↻ 새로고침 중..." : "↻ 전체 새로고침"}
-              </button>
+                >
+                  {isRefreshing ? "↻ 새로고침 중..." : "↻ 전체 새로고침"}
+                </button>
+                <p className="text-[11px] font-medium text-[var(--text-soft)] whitespace-nowrap">
+                  {nextRefreshInSeconds}초 후 새로고침 예정
+                </p>
+              </div>
               <button
                 onClick={handleWarmupAll}
                 disabled={isWarmingAll || accounts.length === 0}
@@ -744,13 +790,15 @@ function App() {
                         트레이로 숨기기
                       </button>
                     )}
-                    <button
-                      onClick={() => {
-                        setDraftPrivacyMode(privacyMode);
-                        setDraftShowCredits(showCredits);
-                        setIsOptionsMenuOpen(false);
-                        setIsPrivacyModalOpen(true);
-                      }}
+                      <button
+                        onClick={() => {
+                          setDraftPrivacyMode(privacyMode);
+                          setDraftShowCredits(showCredits);
+                          setDraftShowMaskToggle(showMaskToggle);
+                          setDraftShowPlanBadge(showPlanBadge);
+                          setIsOptionsMenuOpen(false);
+                          setIsPrivacyModalOpen(true);
+                        }}
                       className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
                       title="계정 이름과 이메일을 화면에 어떻게 표시할지 정합니다.
 전체 표시, 흐리게 숨기기, 앞 3글자만 표시 중에서 고를 수 있습니다."
@@ -892,6 +940,8 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       masked={maskedAccounts.has(activeAccount.id)}
                       privacyMode={privacyMode}
                       showCredits={showCredits}
+                      showMaskToggle={showMaskToggle}
+                      showPlanBadge={showPlanBadge}
                       onToggleMask={() => toggleMask(activeAccount.id)}
                     />
               </section>
@@ -966,6 +1016,8 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       masked={maskedAccounts.has(account.id)}
                       privacyMode={privacyMode}
                       showCredits={showCredits}
+                      showMaskToggle={showMaskToggle}
+                      showPlanBadge={showPlanBadge}
                       onToggleMask={() => toggleMask(account.id)}
                     />
                   ))}
@@ -997,6 +1049,8 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                         masked={maskedAccounts.has(account.id)}
                         privacyMode={privacyMode}
                         showCredits={showCredits}
+                        showMaskToggle={showMaskToggle}
+                        showPlanBadge={showPlanBadge}
                         onToggleMask={() => toggleMask(account.id)}
                       />
                     ))}
@@ -1008,22 +1062,22 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
         )}
       </main>
 
-      {/* Refresh Success Toast */}
-      {refreshSuccess && (
-        <div className="toast-success fixed bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-2xl px-4 py-3 text-sm">
-          <span>✓</span> 사용량을 새로고침했습니다
-        </div>
-      )}
+        {/* Refresh Success Toast */}
+        {refreshSuccess && (
+          <div className="toast-success fixed bottom-6 left-1/2 z-[80] flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-2xl px-4 py-3 text-center text-sm">
+            <span>✓</span> 사용량을 새로고침했습니다
+          </div>
+        )}
 
-      {/* Warm-up Toast */}
-      {warmupToast && (
-        <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 rounded-2xl px-4 py-3 text-sm ${
-            warmupToast.isError
-              ? "toast-error"
-              : "toast-warning"
-          }`}
-        >
+        {/* Warm-up Toast */}
+        {warmupToast && (
+          <div
+            className={`fixed bottom-6 left-1/2 z-[80] max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-2xl px-4 py-3 text-center text-sm ${
+              warmupToast.isError
+                ? "toast-error"
+                : "toast-warning"
+            }`}
+          >
           {warmupToast.message}
         </div>
       )}
@@ -1245,9 +1299,49 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                     checked={draftShowCredits}
                     onChange={(e) => setDraftShowCredits(e.target.checked)}
                   />
-                  <span className="toggle-track relative h-6 w-11 rounded-full transition">
-                    <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
-                  </span>
+                    <span className="toggle-track relative h-6 w-11 rounded-full">
+                      <span className="toggle-thumb absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white peer-checked:translate-x-5" />
+                    </span>
+                </label>
+              </div>
+
+              <div className="option-card flex items-start justify-between gap-4 rounded-2xl p-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-[var(--text-strong)]">눈 아이콘 표시</p>
+                  <p className="text-sm text-[var(--text-body)]">
+                    계정 카드 우측 상단의 눈 아이콘을 보이거나 숨깁니다.
+                  </p>
+                </div>
+                <label className="inline-flex items-center cursor-pointer mt-1">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={draftShowMaskToggle}
+                    onChange={(e) => setDraftShowMaskToggle(e.target.checked)}
+                  />
+                    <span className="toggle-track relative h-6 w-11 rounded-full">
+                      <span className="toggle-thumb absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white peer-checked:translate-x-5" />
+                    </span>
+                </label>
+              </div>
+
+              <div className="option-card flex items-start justify-between gap-4 rounded-2xl p-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-[var(--text-strong)]">플랜 배지 표시</p>
+                  <p className="text-sm text-[var(--text-body)]">
+                    계정 카드 우측 상단의 `Team`, `Plus`, `Pro` 같은 플랜 표시를 보이거나 숨깁니다.
+                  </p>
+                </div>
+                <label className="inline-flex items-center cursor-pointer mt-1">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={draftShowPlanBadge}
+                    onChange={(e) => setDraftShowPlanBadge(e.target.checked)}
+                  />
+                    <span className="toggle-track relative h-6 w-11 rounded-full">
+                      <span className="toggle-thumb absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white peer-checked:translate-x-5" />
+                    </span>
                 </label>
               </div>
             </div>
@@ -1303,9 +1397,9 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       }))
                     }
                   />
-                  <span className="toggle-track relative h-6 w-11 rounded-full transition">
-                    <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
-                  </span>
+                    <span className="toggle-track relative h-6 w-11 rounded-full">
+                      <span className="toggle-thumb absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white peer-checked:translate-x-5" />
+                    </span>
                 </label>
               </div>
 
