@@ -3,6 +3,7 @@ import type { UsageInfo } from "../types";
 interface UsageBarProps {
   usage?: UsageInfo;
   loading?: boolean;
+  showCredits?: boolean;
 }
 
 function formatResetTime(resetAt: number | null | undefined): string {
@@ -82,7 +83,7 @@ function RateLimitBar({
   );
 }
 
-export function UsageBar({ usage, loading }: UsageBarProps) {
+export function UsageBar({ usage, loading, showCredits = true }: UsageBarProps) {
   if (loading && !usage) {
     return (
       <div className="space-y-2">
@@ -144,7 +145,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
           resetsAt={usage.secondary_resets_at}
         />
       )}
-      {usage.credits_balance && (
+      {showCredits && usage.credits_balance && (
         <div className="text-xs text-gray-500">
           크레딧: {usage.credits_balance}
         </div>

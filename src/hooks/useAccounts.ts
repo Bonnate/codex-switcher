@@ -206,6 +206,18 @@ export function useAccounts() {
     [loadAccounts]
   );
 
+  const forceSwitchAccount = useCallback(
+    async (accountId: string) => {
+      try {
+        await invokeBackend("force_switch_account", { accountId });
+        await loadAccounts(true);
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts]
+  );
+
   const deleteAccount = useCallback(
     async (accountId: string) => {
       try {
@@ -372,6 +384,7 @@ export function useAccounts() {
     warmupAccount,
     warmupAllAccounts,
     switchAccount,
+    forceSwitchAccount,
     deleteAccount,
     renameAccount,
     importFromFile,

@@ -9,6 +9,34 @@ import {
 } from "./lib/platform";
 import "./App.css";
 
+const USAGE_ALERT_SETTINGS_KEY = "codex-switcher-usage-alert-settings";
+const PRIVACY_SETTINGS_KEY = "codex-switcher-privacy-settings";
+
+type UsageAlertSettings = {
+  enabled: boolean;
+  thresholdPercent: number;
+};
+
+type PrivacyMode = "full" | "blur" | "prefix3";
+type PrivacySettings = {
+  mode: PrivacyMode;
+  showCredits: boolean;
+};
+
+const DEFAULT_USAGE_ALERT_SETTINGS: UsageAlertSettings = {
+  enabled: false,
+  thresholdPercent: 20,
+};
+
+function clampUsageAlertThreshold(value: number | undefined): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return DEFAULT_USAGE_ALERT_SETTINGS.thresholdPercent;
+  return Math.min(100, Math.max(1, Math.round(value)));
+}
+
+function isPrivacyMode(value: unknown): value is PrivacyMode {
+  return value === "full" || value === "blur" || value === "prefix3";
+}
+
 function App() {
   const {
     accounts,
@@ -20,6 +48,7 @@ function App() {
     warmupAccount,
     warmupAllAccounts,
     switchAccount,
+    forceSwitchAccount,
     deleteAccount,
     renameAccount,
     importFromFile,
@@ -40,7 +69,24 @@ function App() {
   const [configPayload, setConfigPayload] = useState("");
   const [configModalError, setConfigModalError] = useState<string | null>(null);
   const [configCopied, setConfigCopied] = useState(false);
+  const [isUsageAlertModalOpen, setIsUsageAlertModalOpen] = useState(false);
+  const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
+  const [usageAlertSettings, setUsageAlertSettings] = useState<UsageAlertSettings>(
+    DEFAULT_USAGE_ALERT_SETTINGS
+  );
+  const [draftUsageAlertSettings, setDraftUsageAlertSettings] = useState<UsageAlertSettings>(
+    DEFAULT_USAGE_ALERT_SETTINGS
+  );
+  const [privacyMode, setPrivacyMode] = useState<PrivacyMode>("full");
+  const [draftPrivacyMode, setDraftPrivacyMode] = useState<PrivacyMode>("full");
+  const [showCredits, setShowCredits] = useState(true);
+  const [draftShowCredits, setDraftShowCredits] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [forceSwitchTarget, setForceSwitchTarget] = useState<{
+    id: string;
+    name: string;
+    processCount: number;
+  } | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -57,12 +103,11 @@ function App() {
   } | null>(null);
   const [maskedAccounts, setMaskedAccounts] = useState<Set<string>>(new Set());
   const [otherAccountsSort, setOtherAccountsSort] = useState<
-    "deadline_asc" | "deadline_desc" | "remaining_desc" | "remaining_asc"
-  >("deadline_asc");
-  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+    "recommended_queue" | "deadline_asc" | "deadline_desc" | "remaining_desc" | "remaining_asc"
+  >("recommended_queue");
   const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
-  const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const optionsMenuRef = useRef<HTMLDivElement | null>(null);
+  const notifiedUsageAlertKeysRef = useRef<Set<string>>(new Set());
 
   const toggleMask = (accountId: string) => {
     setMaskedAccounts((prev) => {
@@ -72,18 +117,6 @@ function App() {
       } else {
         next.add(accountId);
       }
-      void saveMaskedAccountIds(Array.from(next));
-      return next;
-    });
-  };
-
-  const allMasked =
-    accounts.length > 0 && accounts.every((account) => maskedAccounts.has(account.id));
-
-  const toggleMaskAll = () => {
-    setMaskedAccounts((prev) => {
-      const shouldMaskAll = !accounts.every((account) => prev.has(account.id));
-      const next = shouldMaskAll ? new Set(accounts.map((account) => account.id)) : new Set<string>();
       void saveMaskedAccountIds(Array.from(next));
       return next;
     });
@@ -115,16 +148,51 @@ function App() {
   }, [loadMaskedAccountIds]);
 
   useEffect(() => {
-    if (!isAccountMenuOpen && !isOptionsMenuOpen) return;
+    if (typeof window === "undefined") return;
+
+    try {
+      const raw = window.localStorage.getItem(USAGE_ALERT_SETTINGS_KEY);
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw) as Partial<UsageAlertSettings>;
+      const nextSettings: UsageAlertSettings = {
+        enabled: Boolean(parsed.enabled),
+        thresholdPercent: clampUsageAlertThreshold(parsed.thresholdPercent),
+      };
+      setUsageAlertSettings(nextSettings);
+      setDraftUsageAlertSettings(nextSettings);
+    } catch (err) {
+      console.error("Failed to load usage alert settings:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    try {
+      const raw = window.localStorage.getItem(PRIVACY_SETTINGS_KEY);
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw) as { mode?: unknown; showCredits?: unknown };
+      const nextMode = isPrivacyMode(parsed.mode) ? parsed.mode : "full";
+      const nextShowCredits =
+        typeof parsed.showCredits === "boolean" ? parsed.showCredits : true;
+
+      setPrivacyMode(nextMode);
+      setDraftPrivacyMode(nextMode);
+      setShowCredits(nextShowCredits);
+      setDraftShowCredits(nextShowCredits);
+    } catch (err) {
+      console.error("Failed to load privacy settings:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOptionsMenuOpen) return;
 
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
-      const clickedAccountMenu = accountMenuRef.current?.contains(target);
       const clickedOptionsMenu = optionsMenuRef.current?.contains(target);
-
-      if (!clickedAccountMenu) {
-        setIsAccountMenuOpen(false);
-      }
       if (!clickedOptionsMenu) {
         setIsOptionsMenuOpen(false);
       }
@@ -132,7 +200,7 @@ function App() {
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [isAccountMenuOpen, isOptionsMenuOpen]);
+  }, [isOptionsMenuOpen]);
 
   const handleSwitch = async (accountId: string) => {
     // Check processes before switching
@@ -181,6 +249,38 @@ function App() {
   const showWarmupToast = (message: string, isError = false) => {
     setWarmupToast({ message, isError });
     setTimeout(() => setWarmupToast(null), 2500);
+  };
+
+  const saveUsageAlertSettings = () => {
+    const nextSettings: UsageAlertSettings = {
+      enabled: draftUsageAlertSettings.enabled,
+      thresholdPercent: clampUsageAlertThreshold(draftUsageAlertSettings.thresholdPercent),
+    };
+
+    setUsageAlertSettings(nextSettings);
+    setDraftUsageAlertSettings(nextSettings);
+    notifiedUsageAlertKeysRef.current.clear();
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(USAGE_ALERT_SETTINGS_KEY, JSON.stringify(nextSettings));
+    }
+
+    setIsUsageAlertModalOpen(false);
+    showWarmupToast("사용량 알림 설정을 저장했습니다.");
+  };
+
+  const savePrivacySettings = () => {
+    setPrivacyMode(draftPrivacyMode);
+    setShowCredits(draftShowCredits);
+    if (typeof window !== "undefined") {
+      const nextSettings: PrivacySettings = {
+        mode: draftPrivacyMode,
+        showCredits: draftShowCredits,
+      };
+      window.localStorage.setItem(PRIVACY_SETTINGS_KEY, JSON.stringify(nextSettings));
+    }
+    setIsPrivacyModalOpen(false);
+    showWarmupToast("표시 설정을 저장했습니다.");
   };
 
   const formatWarmupError = (err: unknown) => {
@@ -234,6 +334,31 @@ function App() {
       showWarmupToast(`전체 워밍업 실패: ${formatWarmupError(err)}`, true);
     } finally {
       setIsWarmingAll(false);
+    }
+  };
+
+  const openForceSwitchDialog = (accountId: string, accountName: string) => {
+    setForceSwitchTarget({
+      id: accountId,
+      name: accountName,
+      processCount: processInfo?.count ?? 0,
+    });
+  };
+
+  const confirmForceSwitch = async () => {
+    if (!forceSwitchTarget) return;
+
+    try {
+      setSwitchingId(forceSwitchTarget.id);
+      await forceSwitchAccount(forceSwitchTarget.id);
+      await checkProcesses();
+      setForceSwitchTarget(null);
+      showWarmupToast(`강제 전환 완료: ${forceSwitchTarget.name}`);
+    } catch (err) {
+      console.error("Failed to force switch account:", err);
+      showWarmupToast(`강제 전환 실패: ${formatWarmupError(err)}`, true);
+    } finally {
+      setSwitchingId(null);
     }
   };
 
@@ -331,6 +456,51 @@ function App() {
   const hasRunningProcesses = processInfo && processInfo.count > 0;
   const hasAccounts = accounts.length > 0;
 
+  useEffect(() => {
+    if (!usageAlertSettings.enabled || !activeAccount?.usage || activeAccount.usage.error) {
+      return;
+    }
+
+    const limitCandidates = [
+      { key: "primary", label: "5시간 제한", usedPercent: activeAccount.usage.primary_used_percent },
+      { key: "secondary", label: "주간 제한", usedPercent: activeAccount.usage.secondary_used_percent },
+    ]
+      .map((entry) => ({
+        ...entry,
+        remainingPercent:
+          entry.usedPercent === null || entry.usedPercent === undefined
+            ? null
+            : Math.max(0, 100 - entry.usedPercent),
+      }))
+      .filter(
+        (entry): entry is typeof entry & { remainingPercent: number } =>
+          entry.remainingPercent !== null
+      );
+
+    for (const candidate of limitCandidates) {
+      const alertKey = `${activeAccount.id}:${candidate.key}`;
+
+      if (candidate.remainingPercent <= usageAlertSettings.thresholdPercent) {
+        if (!notifiedUsageAlertKeysRef.current.has(alertKey)) {
+          notifiedUsageAlertKeysRef.current.add(alertKey);
+          showWarmupToast(
+            `사용량 알림: 현재 계정의 ${candidate.label}이 ${candidate.remainingPercent.toFixed(0)}% 남았습니다.`,
+            true
+          );
+        }
+      } else {
+        notifiedUsageAlertKeysRef.current.delete(alertKey);
+      }
+    }
+  }, [
+    activeAccount?.id,
+    activeAccount?.usage?.error,
+    activeAccount?.usage?.primary_used_percent,
+    activeAccount?.usage?.secondary_used_percent,
+    usageAlertSettings.enabled,
+    usageAlertSettings.thresholdPercent,
+  ]);
+
   const sortedOtherAccounts = useMemo(() => {
     const getResetDeadline = (resetAt: number | null | undefined) =>
       resetAt ?? Number.POSITIVE_INFINITY;
@@ -342,7 +512,43 @@ function App() {
       return Math.max(0, 100 - usedPercent);
     };
 
+    const compareRecommendedQueue = (a: typeof otherAccounts[number], b: typeof otherAccounts[number]) => {
+      const aPrimary = getRemainingPercent(a.usage?.primary_used_percent);
+      const bPrimary = getRemainingPercent(b.usage?.primary_used_percent);
+      const aSecondary = getRemainingPercent(a.usage?.secondary_used_percent);
+      const bSecondary = getRemainingPercent(b.usage?.secondary_used_percent);
+      const aDeadline = getResetDeadline(a.usage?.primary_resets_at);
+      const bDeadline = getResetDeadline(b.usage?.primary_resets_at);
+
+      const aHasLiveBudget = aPrimary > 0 ? 1 : 0;
+      const bHasLiveBudget = bPrimary > 0 ? 1 : 0;
+      if (aHasLiveBudget !== bHasLiveBudget) {
+        return bHasLiveBudget - aHasLiveBudget;
+      }
+
+      // Prefer accounts that can take more work right now.
+      if (aPrimary !== bPrimary) {
+        return bPrimary - aPrimary;
+      }
+
+      // If the short window is tied, prefer the account with more weekly headroom.
+      if (aSecondary !== bSecondary) {
+        return bSecondary - aSecondary;
+      }
+
+      // For near-equivalent accounts, consume the one that resets sooner first.
+      if (aDeadline !== bDeadline) {
+        return aDeadline - bDeadline;
+      }
+
+      return a.name.localeCompare(b.name);
+    };
+
     return [...otherAccounts].sort((a, b) => {
+      if (otherAccountsSort === "recommended_queue") {
+        return compareRecommendedQueue(a, b);
+      }
+
       if (otherAccountsSort === "deadline_asc" || otherAccountsSort === "deadline_desc") {
         const deadlineDiff =
           getResetDeadline(a.usage?.primary_resets_at) -
@@ -416,34 +622,6 @@ function App() {
 
             <div className="flex flex-wrap items-center gap-2 shrink-0 md:ml-4 md:w-max md:flex-nowrap md:justify-end">
               <button
-                onClick={toggleMaskAll}
-                className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors shrink-0 whitespace-nowrap"
-                title={
-                  allMasked
-                    ? "모든 계정 이름과 이메일을 다시 표시합니다.\n가려 둔 정보가 한 번에 모두 보이도록 전환됩니다."
-                    : "모든 계정 이름과 이메일을 흐리게 숨깁니다.\n화면 공유 중이거나 주변에 사람이 있을 때 빠르게 가릴 수 있습니다."
-                }
-              >
-                <span className="flex items-center gap-2">
-                  {allMasked ? (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"
-                      />
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  )}
-                  {allMasked ? "전체 보기" : "전체 숨기기"}
-                </span>
-              </button>
-              <button
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap"
@@ -471,23 +649,21 @@ function App() {
                 )}
               </button>
 
-              <div className="relative" ref={accountMenuRef}>
+              <div className="relative" ref={optionsMenuRef}>
                 <button
                   onClick={() => {
-                    setIsAccountMenuOpen((prev) => !prev);
-                    setIsOptionsMenuOpen(false);
+                    setIsOptionsMenuOpen((prev) => !prev);
                   }}
                   className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors shrink-0 whitespace-nowrap"
-                  title="계정 관련 메뉴를 엽니다.
-새 계정 추가 같은 기능이 들어 있습니다."
+                  title="계정 추가, 표시 설정, 백업, 텍스트 이동, 알림 설정을 한 곳에서 엽니다."
                 >
-                  계정 ▾
+                  옵션 ▾
                 </button>
-                {isAccountMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-48 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
+                {isOptionsMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-60 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
                     <button
                       onClick={() => {
-                        setIsAccountMenuOpen(false);
+                        setIsOptionsMenuOpen(false);
                         setIsAddModalOpen(true);
                       }}
                       className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
@@ -496,23 +672,31 @@ function App() {
                     >
                       + 계정 추가
                     </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="relative" ref={optionsMenuRef}>
-                <button
-                  onClick={() => {
-                    setIsOptionsMenuOpen((prev) => !prev);
-                    setIsAccountMenuOpen(false);
-                  }}
-                  className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors shrink-0 whitespace-nowrap"
-                  title="백업, 텍스트로 계정 이동, 기타 보조 기능 메뉴를 엽니다."
-                >
-                  옵션 ▾
-                </button>
-                {isOptionsMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-56 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
+                    <button
+                      onClick={() => {
+                        setDraftPrivacyMode(privacyMode);
+                        setDraftShowCredits(showCredits);
+                        setIsOptionsMenuOpen(false);
+                        setIsPrivacyModalOpen(true);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                      title="계정 이름과 이메일을 화면에 어떻게 표시할지 정합니다.
+전체 표시, 흐리게 숨기기, 앞 3글자만 표시 중에서 고를 수 있습니다."
+                    >
+                      표시 설정
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDraftUsageAlertSettings(usageAlertSettings);
+                        setIsOptionsMenuOpen(false);
+                        setIsUsageAlertModalOpen(true);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                      title="현재 사용 중인 계정의 사용량이 일정 수준 이하로 내려갔을 때
+앱 안에서 알림을 띄우는 기준을 설정합니다."
+                    >
+                      사용량 알림 설정
+                    </button>
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
@@ -622,18 +806,23 @@ function App() {
                 <AccountCard
                   account={activeAccount}
                   onSwitch={() => { }}
+                  onForceSwitch={() =>
+                    openForceSwitchDialog(activeAccount.id, activeAccount.name)
+                  }
                   onWarmup={() =>
                     handleWarmupAccount(activeAccount.id, activeAccount.name)
                   }
                   onDelete={() => handleDelete(activeAccount.id)}
                   onRefresh={() => refreshSingleUsage(activeAccount.id)}
-                  onRename={(newName) => renameAccount(activeAccount.id, newName)}
-                  switching={switchingId === activeAccount.id}
-                  switchDisabled={hasRunningProcesses ?? false}
-                  warmingUp={isWarmingAll || warmingUpId === activeAccount.id}
-                  masked={maskedAccounts.has(activeAccount.id)}
-                  onToggleMask={() => toggleMask(activeAccount.id)}
-                />
+                      onRename={(newName) => renameAccount(activeAccount.id, newName)}
+                      switching={switchingId === activeAccount.id}
+                      switchDisabled={hasRunningProcesses ?? false}
+                      warmingUp={isWarmingAll || warmingUpId === activeAccount.id}
+                      masked={maskedAccounts.has(activeAccount.id)}
+                      privacyMode={privacyMode}
+                      showCredits={showCredits}
+                      onToggleMask={() => toggleMask(activeAccount.id)}
+                    />
               </section>
             )}
 
@@ -655,6 +844,7 @@ function App() {
                         onChange={(e) =>
                           setOtherAccountsSort(
                             e.target.value as
+                              | "recommended_queue"
                               | "deadline_asc"
                               | "deadline_desc"
                               | "remaining_desc"
@@ -663,6 +853,7 @@ function App() {
                         }
                         className="appearance-none font-sans text-xs sm:text-sm font-medium pl-3 pr-9 py-2 rounded-xl border border-gray-300 bg-gradient-to-b from-white to-gray-50 text-gray-700 shadow-sm hover:border-gray-400 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-gray-400 transition-all"
                       >
+                        <option value="recommended_queue">추천 대기열 순</option>
                         <option value="deadline_asc">리셋 빠른 순</option>
                         <option value="deadline_desc">리셋 늦은 순</option>
                         <option value="remaining_desc">
@@ -694,6 +885,7 @@ function App() {
                       key={account.id}
                       account={account}
                       onSwitch={() => handleSwitch(account.id)}
+                      onForceSwitch={() => openForceSwitchDialog(account.id, account.name)}
                       onWarmup={() => handleWarmupAccount(account.id, account.name)}
                       onDelete={() => handleDelete(account.id)}
                       onRefresh={() => refreshSingleUsage(account.id)}
@@ -702,6 +894,8 @@ function App() {
                       switchDisabled={hasRunningProcesses ?? false}
                       warmingUp={isWarmingAll || warmingUpId === account.id}
                       masked={maskedAccounts.has(account.id)}
+                      privacyMode={privacyMode}
+                      showCredits={showCredits}
                       onToggleMask={() => toggleMask(account.id)}
                     />
                   ))}
@@ -748,6 +942,253 @@ function App() {
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}
       />
+
+      {forceSwitchTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-lg mx-4 shadow-xl">
+            <div className="p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">강제 전환</h2>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+                <p className="text-sm font-medium">실행 중인 Codex 세션이 강제로 종료됩니다.</p>
+                <p className="text-sm mt-1">
+                  저장되지 않은 작업, 진행 중인 응답, 현재 콘솔 세션 내용이 사라질 수 있습니다.
+                </p>
+              </div>
+              <div className="space-y-2 text-sm text-gray-700">
+                <p>
+                  전환 대상: <span className="font-medium text-gray-900">{forceSwitchTarget.name}</span>
+                </p>
+                <p>
+                  종료 예정인 Codex 프로세스:{" "}
+                  <span className="font-medium text-gray-900">{forceSwitchTarget.processCount}개</span>
+                </p>
+                <p>계속 진행하면 실행 중인 Codex를 종료한 뒤 이 계정으로 즉시 전환합니다.</p>
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-100">
+              <button
+                onClick={() => setForceSwitchTarget(null)}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={confirmForceSwitch}
+                disabled={switchingId === forceSwitchTarget.id}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors disabled:opacity-50"
+              >
+                {switchingId === forceSwitchTarget.id ? "강제 전환 중..." : "종료 후 전환"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPrivacyModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 shadow-xl">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">표시 설정</h2>
+              <button
+                onClick={() => setIsPrivacyModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <p className="text-sm text-gray-500">
+                모든 계정 카드에 공통으로 적용되는 이름/이메일 표시 방식입니다.
+              </p>
+
+              <label className="flex items-start gap-3 rounded-xl border border-gray-200 p-4 cursor-pointer hover:border-gray-300">
+                <input
+                  type="radio"
+                  name="privacy-mode"
+                  checked={draftPrivacyMode === "full"}
+                  onChange={() => setDraftPrivacyMode("full")}
+                  className="mt-1"
+                />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-gray-900">전체 표시</p>
+                  <p className="text-sm text-gray-500">
+                    계정 이름과 이메일을 원래대로 모두 표시합니다.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-xl border border-gray-200 p-4 cursor-pointer hover:border-gray-300">
+                <input
+                  type="radio"
+                  name="privacy-mode"
+                  checked={draftPrivacyMode === "blur"}
+                  onChange={() => setDraftPrivacyMode("blur")}
+                  className="mt-1"
+                />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-gray-900">흐리게 숨기기</p>
+                  <p className="text-sm text-gray-500">
+                    정보는 남겨 두되 바로 읽기 어렵게 흐리게 표시합니다.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 rounded-xl border border-gray-200 p-4 cursor-pointer hover:border-gray-300">
+                <input
+                  type="radio"
+                  name="privacy-mode"
+                  checked={draftPrivacyMode === "prefix3"}
+                  onChange={() => setDraftPrivacyMode("prefix3")}
+                  className="mt-1"
+                />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-gray-900">앞 3글자만 표시</p>
+                  <p className="text-sm text-gray-500">
+                    이름과 이메일의 앞 3글자만 보여주고 나머지는 `***`로 가립니다.
+                  </p>
+                </div>
+              </label>
+
+              <div className="flex items-start justify-between gap-4 rounded-xl border border-gray-200 p-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-gray-900">크레딧 표시</p>
+                  <p className="text-sm text-gray-500">
+                    계정 카드 아래의 `크레딧: ...` 표시를 보이거나 숨깁니다.
+                  </p>
+                </div>
+                <label className="inline-flex items-center cursor-pointer mt-1">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={draftShowCredits}
+                    onChange={(e) => setDraftShowCredits(e.target.checked)}
+                  />
+                  <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-gray-900">
+                    <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex gap-3 p-5 border-t border-gray-100">
+              <button
+                onClick={() => setIsPrivacyModalOpen(false)}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={savePrivacySettings}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+              >
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isUsageAlertModalOpen && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 shadow-xl">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">사용량 알림 설정</h2>
+              <button
+                onClick={() => setIsUsageAlertModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-gray-900">현재 사용 중인 계정 알림</p>
+                  <p className="text-sm text-gray-500">
+                    활성 계정의 5시간 제한 또는 주간 제한이 기준 이하로 내려가면 토스트 알림을 표시합니다.
+                  </p>
+                </div>
+                <label className="inline-flex items-center cursor-pointer mt-1">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={draftUsageAlertSettings.enabled}
+                    onChange={(e) =>
+                      setDraftUsageAlertSettings((prev) => ({
+                        ...prev,
+                        enabled: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-gray-900">
+                    <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
+                  </span>
+                </label>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  알림 기준
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={draftUsageAlertSettings.thresholdPercent}
+                    onChange={(e) =>
+                      setDraftUsageAlertSettings((prev) => ({
+                        ...prev,
+                        thresholdPercent: clampUsageAlertThreshold(Number(e.target.value)),
+                      }))
+                    }
+                    disabled={!draftUsageAlertSettings.enabled}
+                    className="flex-1"
+                  />
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={draftUsageAlertSettings.thresholdPercent}
+                    onChange={(e) =>
+                      setDraftUsageAlertSettings((prev) => ({
+                        ...prev,
+                        thresholdPercent: clampUsageAlertThreshold(Number(e.target.value)),
+                      }))
+                    }
+                    disabled={!draftUsageAlertSettings.enabled}
+                    className="w-20 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:text-gray-400"
+                  />
+                  <span className="text-sm text-gray-500">%</span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  예: `20%`로 설정하면 남은 사용량이 20% 이하가 되는 순간 알림을 표시합니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 p-5 border-t border-gray-100">
+              <button
+                onClick={() => setIsUsageAlertModalOpen(false)}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+              >
+                취소
+              </button>
+              <button
+                onClick={saveUsageAlertSettings}
+                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+              >
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Import/Export Config Modal */}
       {isConfigModalOpen && (

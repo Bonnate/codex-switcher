@@ -53,7 +53,7 @@ pub async fn check_codex_processes() -> Result<CodexProcessInfo, String> {
 }
 
 /// Find all running codex processes. Returns (active_pids, background_count)
-fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
+pub(crate) fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
     #[cfg(unix)]
     {
         let mut pids = Vec::new();
@@ -114,6 +114,57 @@ fn find_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
 
     #[allow(unreachable_code)]
     Ok((Vec::new(), 0))
+}
+
+pub(crate) fn terminate_codex_processes() -> anyhow::Result<()> {
+    let (pids, _) = find_codex_processes()?;
+
+    if pids.is_empty() {
+        return Ok(());
+    }
+
+    for pid in pids {
+        #[cfg(unix)]
+        {
+            let status = Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status()
+                .with_context(|| format!("failed to terminate Codex process {pid}"))?;
+
+            if !status.success() {
+                anyhow::bail!("failed to terminate Codex process {pid}");
+            }
+        }
+
+        #[cfg(windows)]
+        {
+            let status = Command::new("taskkill")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args(["/F", "/PID", &pid.to_string()])
+                .status()
+                .with_context(|| format!("failed to terminate Codex process {pid}"))?;
+
+            if !status.success() {
+                anyhow::bail!("failed to terminate Codex process {pid}");
+            }
+        }
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(600));
+
+    let (remaining, _) = find_codex_processes()?;
+    if !remaining.is_empty() {
+        anyhow::bail!(
+            "some Codex processes are still running: {}",
+            remaining
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(windows)]

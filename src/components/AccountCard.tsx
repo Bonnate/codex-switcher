@@ -5,6 +5,7 @@ import { UsageBar } from "./UsageBar";
 interface AccountCardProps {
   account: AccountWithUsage;
   onSwitch: () => void;
+  onForceSwitch?: () => void;
   onWarmup: () => Promise<void>;
   onDelete: () => void;
   onRefresh: () => Promise<void>;
@@ -13,6 +14,8 @@ interface AccountCardProps {
   switchDisabled?: boolean;
   warmingUp?: boolean;
   masked?: boolean;
+  privacyMode?: "full" | "blur" | "prefix3";
+  showCredits?: boolean;
   onToggleMask?: () => void;
 }
 
@@ -27,13 +30,25 @@ function formatLastRefresh(date: Date | null): string {
   return date.toLocaleDateString();
 }
 
-function BlurredText({ children, blur }: { children: React.ReactNode; blur: boolean }) {
+function protectText(value: string, mode: "full" | "blur" | "prefix3"): string {
+  if (mode !== "prefix3") return value;
+  if (value.length <= 3) return value;
+  return `${value.slice(0, 3)}***`;
+}
+
+function ProtectedText({
+  value,
+  mode,
+}: {
+  value: string;
+  mode: "full" | "blur" | "prefix3";
+}) {
   return (
     <span
-      className={`transition-all duration-200 select-none ${blur ? "blur-sm" : ""}`}
-      style={blur ? { userSelect: "none" } : undefined}
+      className={`transition-all duration-200 select-none ${mode === "blur" ? "blur-sm" : ""}`}
+      style={mode === "blur" ? { userSelect: "none" } : undefined}
     >
-      {children}
+      {protectText(value, mode)}
     </span>
   );
 }
@@ -41,6 +56,7 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
 export function AccountCard({
   account,
   onSwitch,
+  onForceSwitch,
   onWarmup,
   onDelete,
   onRefresh,
@@ -49,6 +65,8 @@ export function AccountCard({
   switchDisabled,
   warmingUp,
   masked = false,
+  privacyMode = "full",
+  showCredits = true,
   onToggleMask,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -116,6 +134,8 @@ export function AccountCard({
 
   const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planColorClass = planColors[planKey] || planColors.free;
+  const effectivePrivacyMode: "full" | "blur" | "prefix3" = masked ? "blur" : privacyMode;
+  const isPrivacyHidden = effectivePrivacyMode !== "full";
 
 
   return (
@@ -150,23 +170,23 @@ export function AccountCard({
               <h3
                 className="font-semibold text-gray-900 truncate cursor-pointer hover:text-gray-600"
                 onClick={() => {
-                  if (masked) return;
+                  if (isPrivacyHidden) return;
                   setEditName(account.name);
                   setIsEditing(true);
                 }}
                 title={
-                  masked
+                  isPrivacyHidden
                     ? undefined
                     : "클릭해서 이 계정의 표시 이름을 바꿉니다.\n실제 OpenAI 계정 정보가 바뀌는 것은 아니고,\n이 앱 안에서만 보이는 이름이 변경됩니다."
                 }
               >
-                <BlurredText blur={masked}>{account.name}</BlurredText>
+                <ProtectedText value={account.name} mode={effectivePrivacyMode} />
               </h3>
             )}
           </div>
           {account.email && (
             <p className="text-sm text-gray-500 truncate">
-              <BlurredText blur={masked}>{account.email}</BlurredText>
+              <ProtectedText value={account.email} mode={effectivePrivacyMode} />
             </p>
           )}
         </div>
@@ -206,7 +226,11 @@ export function AccountCard({
 
       {/* Usage */}
       <div className="mb-3">
-        <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
+        <UsageBar
+          usage={account.usage}
+          loading={isRefreshing || account.usageLoading}
+          showCredits={showCredits}
+        />
       </div>
 
       {/* Last refresh time */}
@@ -225,20 +249,20 @@ export function AccountCard({
           </button>
         ) : (
           <button
-            onClick={onSwitch}
-            disabled={switching || switchDisabled}
+            onClick={switchDisabled ? onForceSwitch : onSwitch}
+            disabled={switching || (switchDisabled && !onForceSwitch)}
             className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
               switchDisabled
-                ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                ? "bg-amber-100 hover:bg-amber-200 text-amber-900"
                 : "bg-gray-900 hover:bg-gray-800 text-white"
             }`}
             title={
               switchDisabled
-                ? "현재 Codex 프로세스가 실행 중이라 전환할 수 없습니다.\n먼저 실행 중인 Codex 세션을 종료한 뒤 다시 시도하세요."
+                ? "현재 Codex 프로세스가 실행 중입니다.\n강제 전환을 누르면 실행 중인 Codex 세션을 종료한 뒤 계정을 바꿉니다.\n저장되지 않은 작업은 사라질 수 있습니다."
                 : "이 계정을 현재 활성 계정으로 전환합니다.\n전환되면 Codex CLI가 읽는 auth.json도 이 계정 기준으로 바뀝니다."
             }
           >
-            {switching ? "전환 중..." : switchDisabled ? "Codex 실행 중" : "전환"}
+            {switching ? "전환 중..." : switchDisabled ? "강제 전환" : "전환"}
           </button>
         )}
         <button

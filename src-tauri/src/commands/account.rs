@@ -5,6 +5,7 @@ use crate::auth::{
     import_from_auth_json, import_from_auth_json_contents, load_accounts, remove_account,
     save_accounts, set_active_account, switch_to_account, touch_account,
 };
+use crate::commands::process::terminate_codex_processes;
 use crate::types::{AccountInfo, AccountsStore, AuthData, ImportAccountsSummary, StoredAccount};
 
 use anyhow::Context;
@@ -165,6 +166,13 @@ pub async fn switch_account(account_id: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Force switch to a different account after terminating active Codex processes.
+#[tauri::command]
+pub async fn force_switch_account(account_id: String) -> Result<(), String> {
+    terminate_codex_processes().map_err(|e| e.to_string())?;
+    switch_account(account_id).await
 }
 
 /// Remove an account
