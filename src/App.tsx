@@ -6,6 +6,7 @@ import {
   exportFullBackupFile,
   importFullBackupFile,
   invokeBackend,
+  sendSystemNotification,
 } from "./lib/platform";
 import "./App.css";
 
@@ -269,6 +270,17 @@ function App() {
     showWarmupToast("사용량 알림 설정을 저장했습니다.");
   };
 
+  const testUsageAlert = async () => {
+    const threshold = clampUsageAlertThreshold(draftUsageAlertSettings.thresholdPercent);
+    const body = activeAccount
+      ? `${activeAccount.name} 계정의 5시간 제한이 ${threshold}% 남았다고 가정한 테스트 알림입니다.`
+      : `5시간 제한이 ${threshold}% 남았다고 가정한 테스트 알림입니다.`;
+    const delivered = await sendSystemNotification("Codex Switcher 테스트 알림", body);
+    if (!delivered) {
+      showWarmupToast("시스템 알림 권한이 없어 테스트 알림을 보낼 수 없습니다.", true);
+    }
+  };
+
   const savePrivacySettings = () => {
     setPrivacyMode(draftPrivacyMode);
     setShowCredits(draftShowCredits);
@@ -483,14 +495,21 @@ function App() {
       if (candidate.remainingPercent <= usageAlertSettings.thresholdPercent) {
         if (!notifiedUsageAlertKeysRef.current.has(alertKey)) {
           notifiedUsageAlertKeysRef.current.add(alertKey);
-          showWarmupToast(
-            `사용량 알림: 현재 계정의 ${candidate.label}이 ${candidate.remainingPercent.toFixed(0)}% 남았습니다.`,
-            true
-          );
+            void sendSystemNotification(
+              "Codex Switcher 사용량 알림",
+              `현재 계정의 ${candidate.label}이 ${candidate.remainingPercent.toFixed(0)}% 남았습니다.`
+            ).then((delivered) => {
+              if (!delivered) {
+                showWarmupToast(
+                  `사용량 알림: 현재 계정의 ${candidate.label}이 ${candidate.remainingPercent.toFixed(0)}% 남았습니다.`,
+                  true
+                );
+              }
+            });
+          }
+        } else {
+          notifiedUsageAlertKeysRef.current.delete(alertKey);
         }
-      } else {
-        notifiedUsageAlertKeysRef.current.delete(alertKey);
-      }
     }
   }, [
     activeAccount?.id,
@@ -690,13 +709,13 @@ function App() {
                         setDraftUsageAlertSettings(usageAlertSettings);
                         setIsOptionsMenuOpen(false);
                         setIsUsageAlertModalOpen(true);
-                      }}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
-                      title="현재 사용 중인 계정의 사용량이 일정 수준 이하로 내려갔을 때
-앱 안에서 알림을 띄우는 기준을 설정합니다."
-                    >
-                      사용량 알림 설정
-                    </button>
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                        title="현재 사용 중인 계정의 사용량이 일정 수준 이하로 내려갔을 때
+Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
+                      >
+                        사용량 알림 설정
+                      </button>
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
@@ -1106,12 +1125,12 @@ function App() {
 
             <div className="p-5 space-y-5">
               <div className="flex items-start justify-between gap-4">
-                <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-900">현재 사용 중인 계정 알림</p>
-                  <p className="text-sm text-gray-500">
-                    활성 계정의 5시간 제한 또는 주간 제한이 기준 이하로 내려가면 토스트 알림을 표시합니다.
-                  </p>
-                </div>
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-gray-900">현재 사용 중인 계정 알림</p>
+                    <p className="text-sm text-gray-500">
+                      활성 계정의 5시간 제한 또는 주간 제한이 기준 이하로 내려가면 Windows/macOS 시스템 알림을 표시합니다.
+                    </p>
+                  </div>
                 <label className="inline-flex items-center cursor-pointer mt-1">
                   <input
                     type="checkbox"
@@ -1165,25 +1184,31 @@ function App() {
                     className="w-20 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:text-gray-400"
                   />
                   <span className="text-sm text-gray-500">%</span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    예: `20%`로 설정하면 남은 사용량이 20% 이하가 되는 순간 시스템 알림을 표시합니다.
+                  </p>
                 </div>
-                <p className="text-xs text-gray-500">
-                  예: `20%`로 설정하면 남은 사용량이 20% 이하가 되는 순간 알림을 표시합니다.
-                </p>
-              </div>
             </div>
 
-            <div className="flex gap-3 p-5 border-t border-gray-100">
-              <button
-                onClick={() => setIsUsageAlertModalOpen(false)}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
-              >
-                취소
-              </button>
-              <button
-                onClick={saveUsageAlertSettings}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
-              >
-                저장
+              <div className="flex gap-3 p-5 border-t border-gray-100">
+                <button
+                  onClick={() => setIsUsageAlertModalOpen(false)}
+                  className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={testUsageAlert}
+                  className="px-4 py-2.5 text-sm font-medium rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
+                >
+                  테스트 알림
+                </button>
+                <button
+                  onClick={saveUsageAlertSettings}
+                  className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                >
+                  저장
               </button>
             </div>
           </div>

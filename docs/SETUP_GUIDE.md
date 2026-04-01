@@ -161,23 +161,37 @@ pnpm lan
 CODEX_SWITCHER_WEB_PORT=4000 pnpm lan
 ```
 
-## 5. 릴리스 빌드
+## 5. Windows용 실행 파일 빌드
 
-설치형 또는 배포용 실행 파일을 만들려면:
+이 프로젝트는 서버 없이 단독 실행되는 Windows용 `exe`를 만들 수 있습니다.
 
-```bash
-pnpm tauri build
+권장 방법:
+```powershell
+build-exe.cmd
+```
+
+직접 명령으로 실행하면:
+```powershell
+pnpm tauri build --no-bundle
 ```
 
 출력 위치:
-- `src-tauri/target/release/bundle/`
-
-Windows에서 보통:
-- 설치 파일
-- 번들 파일
 - `src-tauri/target/release/codex-switcher.exe`
 
-가 생성됩니다.
+실행:
+```powershell
+run-exe.cmd
+```
+
+또는:
+```powershell
+src-tauri\target\release\codex-switcher.exe
+```
+
+참고:
+- 이 `exe`는 별도 서버 없이 단독 실행됩니다
+- `cargo build --release`만으로 만든 실행 파일은 Tauri 설정이 제대로 반영되지 않을 수 있으므로 권장하지 않습니다
+- 설치형 `setup.exe` / `.msi`가 꼭 필요하면 별도 서명 설정을 추가한 뒤 `pnpm tauri build`를 사용해야 합니다
 
 ## 6. 계정 데이터 위치
 
@@ -191,12 +205,42 @@ Windows에서 보통:
 - 프로젝트 폴더만 복사해도 계정은 자동으로 따라오지 않을 수 있음
 - 계정까지 옮기려면 위 경로의 데이터도 같이 이동해야 함
 
-## 7. 다른 PC로 계정 옮기기
+## 7. 다른 PC로 배포하기
+
+### 방법 A. 실행 파일만 배포
+
+대상:
+- 다른 Windows PC에서 바로 실행만 하고 싶은 경우
+
+절차:
+1. 메인 PC에서 `build-exe.cmd` 실행
+2. 생성된 `src-tauri/target/release/codex-switcher.exe`를 다른 PC로 복사
+3. 다른 PC에서 `codex-switcher.exe` 실행
+
+주의:
+- 대상 PC에는 보통 WebView2 런타임이 필요합니다
+- 프로젝트 소스 전체를 복사할 필요는 없습니다
+- 이 방식은 앱 실행 파일만 옮기는 것이고 계정 데이터는 자동으로 포함되지 않습니다
+
+### 방법 B. 실행 파일 + 계정 데이터 같이 배포
+
+대상:
+- 다른 Windows PC에서 같은 계정 목록까지 바로 쓰고 싶은 경우
+
+절차:
+1. 메인 PC에서 `build-exe.cmd` 실행
+2. `src-tauri/target/release/codex-switcher.exe`를 다른 PC로 복사
+3. 계정 데이터도 함께 이동
+4. 다른 PC에서 앱 실행
+
+계정 데이터 이동 방식은 아래 두 가지 중 하나를 사용하면 됩니다.
+
+## 8. 다른 PC로 계정 옮기기
 
 권장 방법:
-1. 앱에서 `Account -> Export Full Encrypted File`
+1. 앱에서 `옵션 -> 백업 파일 만들기`
 2. 생성된 `.cswf` 파일을 다른 PC로 복사
-3. 다른 PC에서 `Account -> Import Full Encrypted File`
+3. 다른 PC에서 `옵션 -> 백업 파일 복원`
 
 대안:
 - `%USERPROFILE%\.codex`
@@ -208,7 +252,7 @@ Windows에서 보통:
 - Codex CLI 종료
 - Codex Switcher 종료
 
-## 8. 자주 막히는 문제
+## 9. 자주 막히는 문제
 
 ### `cargo not found`
 
@@ -218,6 +262,15 @@ Windows에서 보통:
 
 해결:
 - Rust 설치 후 새 터미널 열기
+
+### `run-exe.cmd` 실행 시 `localhost` 연결 오류가 뜸
+
+원인:
+- `cargo build --release`로 만든 실행 파일을 실행했을 가능성
+
+해결:
+- 반드시 `build-exe.cmd` 또는 `pnpm tauri build --no-bundle`로 다시 빌드
+- 그 후 `src-tauri/target/release/codex-switcher.exe` 실행
 
 ### PowerShell에서 `npm` 또는 `pnpm` 실행이 막힘
 
@@ -243,7 +296,7 @@ Windows에서 보통:
 해결:
 - 실행 중인 Codex CLI 세션 종료 후 다시 전환
 
-## 9. 가장 짧은 실행 절차
+## 10. 가장 짧은 실행 절차
 
 Windows:
 ```powershell
