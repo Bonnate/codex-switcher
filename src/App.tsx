@@ -55,7 +55,6 @@ function App() {
     warmupAccount,
     warmupAllAccounts,
     switchAccount,
-    forceSwitchAccount,
     deleteAccount,
     renameAccount,
     importFromFile,
@@ -93,11 +92,6 @@ function App() {
   const [showPlanBadge, setShowPlanBadge] = useState(true);
   const [draftShowPlanBadge, setDraftShowPlanBadge] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
-  const [forceSwitchTarget, setForceSwitchTarget] = useState<{
-    id: string;
-    name: string;
-    processCount: number;
-  } | null>(null);
   const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
@@ -373,31 +367,6 @@ function App() {
       showWarmupToast(`전체 워밍업 실패: ${formatWarmupError(err)}`, true);
     } finally {
       setIsWarmingAll(false);
-    }
-  };
-
-  const openForceSwitchDialog = (accountId: string, accountName: string) => {
-    setForceSwitchTarget({
-      id: accountId,
-      name: accountName,
-      processCount: processInfo?.count ?? 0,
-    });
-  };
-
-  const confirmForceSwitch = async () => {
-    if (!forceSwitchTarget) return;
-
-    try {
-      setSwitchingId(forceSwitchTarget.id);
-      await forceSwitchAccount(forceSwitchTarget.id);
-      await checkProcesses();
-      setForceSwitchTarget(null);
-      showWarmupToast(`강제 전환 완료: ${forceSwitchTarget.name}`);
-    } catch (err) {
-      console.error("Failed to force switch account:", err);
-      showWarmupToast(`강제 전환 실패: ${formatWarmupError(err)}`, true);
-    } finally {
-      setSwitchingId(null);
     }
   };
 
@@ -926,9 +895,6 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                 <AccountCard
                   account={activeAccount}
                   onSwitch={() => { }}
-                  onForceSwitch={() =>
-                    openForceSwitchDialog(activeAccount.id, activeAccount.name)
-                  }
                   onWarmup={() =>
                     handleWarmupAccount(activeAccount.id, activeAccount.name)
                   }
@@ -1006,7 +972,6 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       key={account.id}
                       account={account}
                       onSwitch={() => handleSwitch(account.id)}
-                      onForceSwitch={() => openForceSwitchDialog(account.id, account.name)}
                       onWarmup={() => handleWarmupAccount(account.id, account.name)}
                       onRefresh={() => refreshSingleUsage(account.id)}
                       onRename={(newName) => renameAccount(account.id, newName)}
@@ -1039,7 +1004,6 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                         key={account.id}
                         account={account}
                         onSwitch={() => handleSwitch(account.id)}
-                        onForceSwitch={() => openForceSwitchDialog(account.id, account.name)}
                         onWarmup={() => handleWarmupAccount(account.id, account.name)}
                         onRefresh={() => refreshSingleUsage(account.id)}
                         onRename={(newName) => renameAccount(account.id, newName)}
@@ -1171,49 +1135,6 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   </div>
                 );
               })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {forceSwitchTarget && (
-        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
-          <div className="modal-surface mx-4 w-full max-w-lg rounded-[28px]">
-            <div className="soft-divider border-b p-5">
-              <h2 className="text-lg font-semibold text-[var(--text-strong)]">강제 전환</h2>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="rounded-2xl border border-[rgba(255,205,131,0.45)] bg-[rgba(255,243,218,0.9)] px-4 py-3 text-[#8a5c23]">
-                <p className="text-sm font-medium">실행 중인 Codex 세션이 강제로 종료됩니다.</p>
-                <p className="text-sm mt-1">
-                  저장되지 않은 작업, 진행 중인 응답, 현재 콘솔 세션 내용이 사라질 수 있습니다.
-                </p>
-              </div>
-              <div className="space-y-2 text-sm text-[var(--text-body)]">
-                <p>
-                  전환 대상: <span className="font-medium text-[var(--text-strong)]">{forceSwitchTarget.name}</span>
-                </p>
-                <p>
-                  종료 예정인 Codex 프로세스:{" "}
-                  <span className="font-medium text-[var(--text-strong)]">{forceSwitchTarget.processCount}개</span>
-                </p>
-                <p>계속 진행하면 실행 중인 Codex를 종료한 뒤 이 계정으로 즉시 전환합니다.</p>
-              </div>
-            </div>
-            <div className="soft-divider flex gap-3 border-t p-5">
-              <button
-                onClick={() => setForceSwitchTarget(null)}
-                className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
-              >
-                취소
-              </button>
-              <button
-                onClick={confirmForceSwitch}
-                disabled={switchingId === forceSwitchTarget.id}
-                className="btn-base btn-accent px-4 py-2.5 text-sm font-medium disabled:opacity-50"
-              >
-                {switchingId === forceSwitchTarget.id ? "강제 전환 중..." : "종료 후 전환"}
-              </button>
             </div>
           </div>
         </div>

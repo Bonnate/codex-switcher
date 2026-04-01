@@ -9,7 +9,6 @@ import {
 interface AccountCardProps {
   account: AccountWithUsage;
   onSwitch: () => void;
-  onForceSwitch?: () => void;
   onWarmup: () => Promise<void>;
   onRefresh: () => Promise<void>;
   onRename: (newName: string) => Promise<void>;
@@ -61,7 +60,6 @@ function ProtectedText({
 export function AccountCard({
   account,
   onSwitch,
-  onForceSwitch,
   onWarmup,
   onRefresh,
   onRename,
@@ -263,20 +261,16 @@ export function AccountCard({
               </button>
             ) : (
               <button
-                onClick={switchDisabled ? onForceSwitch : onSwitch}
-                disabled={switching || (switchDisabled && !onForceSwitch)}
-                className={`btn-base flex-1 px-4 py-2 text-sm font-medium disabled:opacity-50 ${
-                  switchDisabled
-                    ? "btn-accent"
-                    : "btn-primary"
-                }`}
+                onClick={onSwitch}
+                disabled={switching || switchDisabled}
+                className="btn-base btn-primary flex-1 px-4 py-2 text-sm font-medium disabled:opacity-50"
                 title={
                   switchDisabled
-                    ? "현재 Codex 프로세스가 실행 중입니다.\n강제 전환을 누르면 실행 중인 Codex 세션을 종료한 뒤 계정을 바꿉니다.\n저장되지 않은 작업은 사라질 수 있습니다."
+                    ? "Codex가 실행 중이라 지금은 계정을 전환할 수 없습니다."
                     : "이 계정을 현재 활성 계정으로 전환합니다.\n전환되면 Codex CLI가 읽는 auth.json도 이 계정 기준으로 바뀝니다."
                 }
               >
-                {switching ? "전환 중..." : switchDisabled ? "강제 전환" : "전환"}
+                {switching ? "전환 중..." : "전환"}
               </button>
             )}
             <button

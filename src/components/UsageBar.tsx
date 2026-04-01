@@ -30,19 +30,6 @@ function formatResetTime(resetAt: number | null | undefined): string {
   return `${Math.floor(diff / 3600)}시간 ${Math.floor((diff % 3600) / 60)}분`;
 }
 
-function formatExactResetTime(resetAt: number | null | undefined): string {
-  if (!resetAt) return "";
-
-  const date = new Date(resetAt * 1000);
-  const month = new Intl.DateTimeFormat(undefined, { month: "long" }).format(date);
-  const day = date.getDate();
-  const minutes = String(date.getMinutes()).padStart(2, "0");
-  const period = date.getHours() >= 12 ? "PM" : "AM";
-  const hour12 = date.getHours() % 12 || 12;
-
-  return `${month} ${day}, ${hour12}:${minutes} ${period}`;
-}
-
 function formatWindowDuration(minutes: number | null | undefined): string {
   if (!minutes) return "";
   if (minutes < 60) return `${minutes}분`;
@@ -94,27 +81,22 @@ export function getExhaustedRateLimits(usage?: UsageInfo): ExhaustedRateLimit[] 
 export function formatExhaustedRateLimitLine(limit: ExhaustedRateLimit): string {
   const windowLabel = formatWindowDuration(limit.windowMinutes);
   const resetLabel = formatResetTime(limit.resetsAt);
-  const exactResetLabel = formatExactResetTime(limit.resetsAt);
 
   return [
     `${limit.label}${windowLabel ? ` (${windowLabel})` : ""}`,
     resetLabel ? `${resetLabel} 후 재사용` : "",
-    resetLabel && exactResetLabel ? `(${exactResetLabel})` : "",
   ]
     .filter(Boolean)
-    .join(" • ")
-    .replace("후 재사용 • (", "후 재사용 (");
+    .join(" • ");
 }
 
 function RateLimitBar({
   label,
   usedPercent,
-  windowMinutes,
   resetsAt,
 }: {
   label: string;
   usedPercent: number;
-  windowMinutes?: number | null;
   resetsAt?: number | null;
 }) {
   const remainingPercent = getRemainingPercent(usedPercent);
@@ -128,18 +110,15 @@ function RateLimitBar({
         ? "bg-[linear-gradient(90deg,#ffd37c_0%,#ffb85b_100%)]"
         : "bg-[linear-gradient(90deg,#8fbbff_0%,#6f82ff_55%,#7f70ff_100%)]";
 
-  const windowLabel = formatWindowDuration(windowMinutes);
   const resetLabel = formatResetTime(resetsAt);
-  const exactResetLabel = formatExactResetTime(resetsAt);
 
   return (
     <div className="space-y-1.5">
-      <div className="flex justify-between text-xs text-[var(--text-body)]">
-        <span>{label} {windowLabel && `(${windowLabel})`}</span>
-        <span>
+      <div className="flex flex-col gap-1 text-xs text-[var(--text-body)] sm:flex-row sm:items-center sm:justify-between">
+        <span>{label}</span>
+        <span className="sm:text-right">
           {remainingPercent.toFixed(0)}% 남음
           {!isExhausted && resetLabel && ` • ${resetLabel} 후 초기화`}
-          {!isExhausted && resetLabel && exactResetLabel && ` (${exactResetLabel})`}
         </span>
       </div>
       <div className="h-2 rounded-full overflow-hidden bg-[rgba(224,231,248,0.9)] shadow-[inset_0_1px_1px_rgba(255,255,255,0.7)]">
@@ -227,7 +206,6 @@ export function UsageBar({ usage, loading, showCredits = true }: UsageBarProps) 
           key={limit.label}
           label={limit.label}
           usedPercent={limit.usedPercent}
-          windowMinutes={limit.windowMinutes}
           resetsAt={limit.resetsAt}
         />
       ))}
