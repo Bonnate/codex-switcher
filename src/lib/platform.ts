@@ -43,6 +43,22 @@ export async function openExternalUrl(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+export async function hideWindowToTray(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    await getCurrentWindow().hide();
+    return true;
+  } catch (error) {
+    console.warn("Direct window hide failed, falling back to backend command:", error);
+    await invokeBackend("hide_main_window_to_tray");
+    return true;
+  }
+}
+
 export async function sendSystemNotification(title: string, body: string): Promise<boolean> {
   try {
     if (isTauriRuntime()) {

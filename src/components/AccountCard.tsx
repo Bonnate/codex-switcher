@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 import type { AccountWithUsage } from "../types";
-import { UsageBar } from "./UsageBar";
+import {
+  UsageBar,
+  formatExhaustedRateLimitLine,
+  getExhaustedRateLimits,
+} from "./UsageBar";
 
 interface AccountCardProps {
   account: AccountWithUsage;
   onSwitch: () => void;
   onForceSwitch?: () => void;
   onWarmup: () => Promise<void>;
-  onDelete: () => void;
   onRefresh: () => Promise<void>;
   onRename: (newName: string) => Promise<void>;
   switching?: boolean;
@@ -58,7 +61,6 @@ export function AccountCard({
   onSwitch,
   onForceSwitch,
   onWarmup,
-  onDelete,
   onRefresh,
   onRename,
   switching,
@@ -124,187 +126,221 @@ export function AccountCard({
       : "알 수 없음";
 
   const planColors: Record<string, string> = {
-    pro: "bg-indigo-50 text-indigo-700 border-indigo-200",
-    plus: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    team: "bg-blue-50 text-blue-700 border-blue-200",
-    enterprise: "bg-amber-50 text-amber-700 border-amber-200",
-    free: "bg-gray-50 text-gray-600 border-gray-200",
-    api_key: "bg-orange-50 text-orange-700 border-orange-200",
+    pro: "bg-[rgba(145,140,255,0.14)] text-[var(--primary-strong)] border-[rgba(145,140,255,0.3)]",
+    plus: "bg-[rgba(132,223,194,0.18)] text-[#2f8d76] border-[rgba(132,223,194,0.34)]",
+    team: "bg-[rgba(146,216,255,0.18)] text-[#4466d8] border-[rgba(146,216,255,0.34)]",
+    enterprise: "bg-[rgba(255,203,123,0.2)] text-[#946326] border-[rgba(255,203,123,0.34)]",
+    free: "bg-[rgba(226,231,248,0.75)] text-[var(--text-body)] border-[rgba(186,195,233,0.4)]",
+    api_key: "bg-[rgba(255,221,194,0.28)] text-[#ad6a3a] border-[rgba(255,191,143,0.42)]",
   };
 
   const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planColorClass = planColors[planKey] || planColors.free;
   const effectivePrivacyMode: "full" | "blur" | "prefix3" = masked ? "blur" : privacyMode;
   const isPrivacyHidden = effectivePrivacyMode !== "full";
-
+  const exhaustedLimits = getExhaustedRateLimits(account.usage);
+  const isExhausted = exhaustedLimits.length > 0;
 
   return (
     <div
-      className={`relative rounded-xl border p-5 transition-all duration-200 ${
+      className={`relative overflow-hidden rounded-[28px] border transition-all duration-200 backdrop-blur-xl ${
         account.is_active
-          ? "bg-white border-emerald-400 shadow-sm"
-          : "bg-white border-gray-200 hover:border-gray-300"
+          ? "glass-panel-strong border-[rgba(118,145,255,0.44)] shadow-[0_24px_56px_rgba(102,120,208,0.16)]"
+          : isExhausted
+            ? "bg-[rgba(243,246,255,0.8)] border-[rgba(187,196,228,0.38)] shadow-[0_16px_36px_rgba(131,146,204,0.09)]"
+            : "glass-panel border-[rgba(177,190,236,0.44)] hover:border-[rgba(133,150,237,0.58)]"
       }`}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            {account.is_active && (
-              <span className="flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-              </span>
-            )}
-            {isEditing ? (
-              <input
-                ref={inputRef}
-                type="text"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                onBlur={handleRename}
-                onKeyDown={handleKeyDown}
-                className="font-semibold text-gray-900 bg-gray-100 px-2 py-0.5 rounded border border-gray-300 focus:outline-none focus:border-gray-500 w-full"
-              />
-            ) : (
-              <h3
-                className="font-semibold text-gray-900 truncate cursor-pointer hover:text-gray-600"
-                onClick={() => {
-                  if (isPrivacyHidden) return;
-                  setEditName(account.name);
-                  setIsEditing(true);
-                }}
-                title={
-                  isPrivacyHidden
-                    ? undefined
-                    : "클릭해서 이 계정의 표시 이름을 바꿉니다.\n실제 OpenAI 계정 정보가 바뀌는 것은 아니고,\n이 앱 안에서만 보이는 이름이 변경됩니다."
-                }
-              >
-                <ProtectedText value={account.name} mode={effectivePrivacyMode} />
-              </h3>
+      <div className={`card-header-surface px-5 ${isExhausted ? "pb-4 pt-5" : "pb-5 pt-5"}`}>
+        <div className="relative flex items-start justify-between">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-1">
+              {account.is_active && (
+                <span className="flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-[var(--mint)] opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--primary)]"></span>
+                </span>
+              )}
+              {isEditing ? (
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  onBlur={handleRename}
+                  onKeyDown={handleKeyDown}
+                  className="field-shell w-full rounded-lg px-2 py-0.5 font-semibold text-[var(--text-strong)]"
+                />
+              ) : (
+                <h3
+                  className="cursor-pointer truncate text-[1.15rem] font-semibold tracking-[-0.03em] text-[var(--text-strong)] hover:text-[var(--primary-strong)]"
+                  onClick={() => {
+                    if (isPrivacyHidden) return;
+                    setEditName(account.name);
+                    setIsEditing(true);
+                  }}
+                  title={
+                    isPrivacyHidden
+                      ? undefined
+                      : "클릭해서 이 계정의 표시 이름을 바꿉니다.\n실제 OpenAI 계정 정보가 바뀌는 것은 아니고,\n이 앱 안에서만 보이는 이름이 변경됩니다."
+                  }
+                >
+                  <ProtectedText value={account.name} mode={effectivePrivacyMode} />
+                </h3>
+              )}
+            </div>
+            {account.email && (
+              <p className="truncate text-sm text-[var(--text-body)]">
+                <ProtectedText value={account.email} mode={effectivePrivacyMode} />
+              </p>
             )}
           </div>
-          {account.email && (
-            <p className="text-sm text-gray-500 truncate">
-              <ProtectedText value={account.email} mode={effectivePrivacyMode} />
-            </p>
-          )}
-        </div>
 
-        <div className="flex items-center gap-2">
-          {/* Eye toggle */}
-          {onToggleMask && (
+          <div className="flex items-center gap-2 rounded-full border border-[rgba(176,188,235,0.42)] bg-[rgba(255,255,255,0.68)] px-2 py-1 shadow-[0_8px_18px_rgba(126,141,204,0.08)] backdrop-blur-md">
+            {onToggleMask && (
+              <button
+                onClick={onToggleMask}
+                className="rounded-full p-1 text-[var(--text-soft)] transition-colors hover:bg-[rgba(236,241,255,0.82)] hover:text-[var(--primary-strong)]"
+                title={
+                  masked
+                    ? "이 계정의 이름과 이메일을 다시 보이게 합니다."
+                    : "이 계정의 이름과 이메일을 흐리게 숨깁니다.\n화면에는 남아 있지만 바로 읽기 어렵게 표시됩니다."
+                }
+              >
+                {masked ? (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                )}
+              </button>
+            )}
+            <span
+              className={`rounded-full border px-2.5 py-1 text-xs font-medium shadow-sm ${planColorClass}`}
+            >
+              {planDisplay}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className={`${isExhausted ? "card-body-surface-dead px-5 pb-4 pt-3" : "card-body-surface px-5 pb-5 pt-4"}`}>
+        {!isExhausted && (
+          <div className="mb-3">
+            <UsageBar
+              usage={account.usage}
+              loading={isRefreshing || account.usageLoading}
+              showCredits={showCredits}
+            />
+          </div>
+        )}
+
+        {!isExhausted ? (
+          <>
+            <div className="mb-3 text-xs text-[var(--text-soft)]">
+              마지막 갱신: {formatLastRefresh(lastRefresh)}
+            </div>
+
+            <div className="flex gap-2">
+            {account.is_active ? (
+              <button
+                disabled
+                className="btn-base btn-secondary flex-1 cursor-default px-4 py-2 text-sm font-medium text-[var(--text-body)]"
+              >
+                ✓ 사용 중
+              </button>
+            ) : (
+              <button
+                onClick={switchDisabled ? onForceSwitch : onSwitch}
+                disabled={switching || (switchDisabled && !onForceSwitch)}
+                className={`btn-base flex-1 px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+                  switchDisabled
+                    ? "btn-accent"
+                    : "btn-primary"
+                }`}
+                title={
+                  switchDisabled
+                    ? "현재 Codex 프로세스가 실행 중입니다.\n강제 전환을 누르면 실행 중인 Codex 세션을 종료한 뒤 계정을 바꿉니다.\n저장되지 않은 작업은 사라질 수 있습니다."
+                    : "이 계정을 현재 활성 계정으로 전환합니다.\n전환되면 Codex CLI가 읽는 auth.json도 이 계정 기준으로 바뀝니다."
+                }
+              >
+                {switching ? "전환 중..." : switchDisabled ? "강제 전환" : "전환"}
+              </button>
+            )}
             <button
-              onClick={onToggleMask}
-              className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+              onClick={() => {
+                void onWarmup();
+              }}
+              disabled={warmingUp}
+              className={`btn-base px-3 py-2 text-sm ${
+                warmingUp
+                  ? "btn-accent opacity-70"
+                  : "border border-[rgba(255,205,131,0.4)] bg-[rgba(255,245,223,0.92)] text-[#946326]"
+              }`}
               title={
-                masked
-                  ? "이 계정의 이름과 이메일을 다시 보이게 합니다."
-                  : "이 계정의 이름과 이메일을 흐리게 숨깁니다.\n화면에는 남아 있지만 바로 읽기 어렵게 표시됩니다."
+                warmingUp
+                  ? "이 계정으로 워밍업 요청을 보내는 중입니다."
+                  : "이 계정으로 아주 작은 워밍업 요청을 보냅니다.\n사용량 점검이나 상태 확인용 보조 기능입니다."
               }
             >
-              {masked ? (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-              )}
+              ⚡
             </button>
-          )}
-          {/* Plan badge */}
-          <span
-            className={`px-2.5 py-1 text-xs font-medium rounded-full border ${planColorClass}`}
-          >
-            {planDisplay}
-          </span>
-        </div>
-      </div>
-
-      {/* Usage */}
-      <div className="mb-3">
-        <UsageBar
-          usage={account.usage}
-          loading={isRefreshing || account.usageLoading}
-          showCredits={showCredits}
-        />
-      </div>
-
-      {/* Last refresh time */}
-      <div className="text-xs text-gray-400 mb-3">
-        마지막 갱신: {formatLastRefresh(lastRefresh)}
-      </div>
-
-      {/* Actions */}
-      <div className="flex gap-2">
-        {account.is_active ? (
-          <button
-            disabled
-            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 text-gray-500 border border-gray-200 cursor-default"
-          >
-            ✓ 사용 중
-          </button>
-        ) : (
-          <button
-            onClick={switchDisabled ? onForceSwitch : onSwitch}
-            disabled={switching || (switchDisabled && !onForceSwitch)}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
-              switchDisabled
-                ? "bg-amber-100 hover:bg-amber-200 text-amber-900"
-                : "bg-gray-900 hover:bg-gray-800 text-white"
-            }`}
-            title={
-              switchDisabled
-                ? "현재 Codex 프로세스가 실행 중입니다.\n강제 전환을 누르면 실행 중인 Codex 세션을 종료한 뒤 계정을 바꿉니다.\n저장되지 않은 작업은 사라질 수 있습니다."
-                : "이 계정을 현재 활성 계정으로 전환합니다.\n전환되면 Codex CLI가 읽는 auth.json도 이 계정 기준으로 바뀝니다."
-            }
-          >
-            {switching ? "전환 중..." : switchDisabled ? "강제 전환" : "전환"}
-          </button>
-        )}
-        <button
-          onClick={() => {
-            void onWarmup();
-          }}
-          disabled={warmingUp}
-          className={`px-3 py-2 text-sm rounded-lg transition-colors ${
-            warmingUp
-              ? "bg-amber-100 text-amber-500"
-              : "bg-amber-50 hover:bg-amber-100 text-amber-700"
-          }`}
-          title={
-            warmingUp
-              ? "이 계정으로 워밍업 요청을 보내는 중입니다."
-              : "이 계정으로 아주 작은 워밍업 요청을 보냅니다.\n사용량 점검이나 상태 확인용 보조 기능입니다."
-          }
-        >
-          ⚡
-        </button>
-        <button
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-          className={`px-3 py-2 text-sm rounded-lg transition-colors ${
-            isRefreshing
-              ? "bg-gray-200 text-gray-400"
-              : "bg-gray-100 hover:bg-gray-200 text-gray-600"
-          }`}
-          title="이 계정의 사용량 정보를 다시 조회합니다.
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className={`btn-base px-3 py-2 text-sm ${
+                isRefreshing
+                  ? "border border-[rgba(190,198,232,0.4)] bg-[rgba(226,231,248,0.95)] text-[var(--text-soft)]"
+                  : "btn-secondary"
+              }`}
+              title="이 계정의 사용량 정보를 다시 조회합니다.
 5시간 제한, 주간 제한, 크레딧 표시를 최신 상태로 갱신합니다."
-        >
-          <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
-        </button>
-        <button
-          onClick={onDelete}
-          className="px-3 py-2 text-sm rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition-colors"
-          title="이 계정을 Codex Switcher 목록에서 삭제합니다.
-실제 OpenAI 계정이 삭제되는 것은 아닙니다.
-삭제 확인을 위해 한 번 더 눌러야 적용됩니다."
-        >
-          ✕
-        </button>
+            >
+              <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
+            </button>
+          </div>
+          </>
+        ) : (
+          <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-[rgba(186,195,233,0.34)] bg-[rgba(248,250,255,0.58)] px-3 py-2">
+            <div className="min-w-0 text-xs text-[var(--text-soft)]">
+              마지막 갱신: {formatLastRefresh(lastRefresh)}
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className={`btn-base shrink-0 px-3 py-2 text-sm ${
+                isRefreshing
+                  ? "border border-[rgba(190,198,232,0.4)] bg-[rgba(226,231,248,0.95)] text-[var(--text-soft)]"
+                  : "btn-secondary"
+              }`}
+              title="이 계정의 사용량 정보를 다시 조회합니다.
+5시간 제한, 주간 제한, 크레딧 표시를 최신 상태로 갱신합니다."
+            >
+              <span className={isRefreshing ? "animate-spin inline-block" : ""}>↻</span>
+            </button>
+          </div>
+        )}
+
+        {exhaustedLimits.length > 0 && (
+          <div className="mt-3 border-t soft-divider pt-3">
+            <div className="rounded-2xl border border-[rgba(186,195,233,0.48)] bg-[rgba(238,241,250,0.9)] px-3 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
+              <div className="mb-2 text-[11px] font-semibold tracking-tight text-[var(--text-soft)]">
+                재사용까지 남음
+              </div>
+              <div className="space-y-1.5">
+                {exhaustedLimits.map((limit) => (
+                  <div key={limit.label} className="text-xs font-medium text-[var(--text-body)]">
+                    {formatExhaustedRateLimitLine(limit)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

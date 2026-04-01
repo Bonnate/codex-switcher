@@ -111,21 +111,21 @@ export function AddAccountModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 shadow-xl">
+    <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+      <div className="modal-surface mx-4 w-full max-w-md rounded-[28px]">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-gray-100">
-          <h2 className="text-lg font-semibold text-gray-900">계정 추가</h2>
+        <div className="soft-divider flex items-center justify-between border-b p-5">
+          <h2 className="text-lg font-semibold text-[var(--text-strong)]">계정 추가</h2>
           <button
             onClick={handleClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-[var(--text-soft)] transition-colors hover:text-[var(--primary-strong)]"
           >
             ✕
           </button>
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-gray-100">
+        <div className="soft-divider flex border-b">
           {(["oauth", "import"] as Tab[]).map((tab) => (
             <button
               key={tab}
@@ -141,8 +141,8 @@ export function AddAccountModal({
                 setError(null);
               }}
               className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab
-                  ? "text-gray-900 border-b-2 border-gray-900 -mb-px"
-                  : "text-gray-400 hover:text-gray-600"
+                  ? "text-[var(--text-strong)] border-b-2 border-[var(--primary)] -mb-px"
+                  : "text-[var(--text-soft)] hover:text-[var(--primary-strong)]"
                 }`}
             >
               {tab === "oauth" ? "ChatGPT 로그인" : "파일 가져오기"}
@@ -154,7 +154,7 @@ export function AddAccountModal({
         <div className="p-5 space-y-4">
           {/* Account Name (always shown) */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="mb-2 block text-sm font-medium text-[var(--text-strong)]">
               계정 이름
             </label>
             <input
@@ -162,26 +162,26 @@ export function AddAccountModal({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="예: 업무용 계정"
-              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 transition-colors"
+              className="field-shell w-full rounded-xl px-4 py-2.5 transition-colors"
             />
           </div>
 
           {/* Tab-specific content */}
           {activeTab === "oauth" && (
-            <div className="text-sm text-gray-500">
+            <div className="text-sm text-[var(--text-body)]">
               {oauthPending ? (
                 <div className="text-center py-4">
-                  <div className="animate-spin h-8 w-8 border-2 border-gray-900 border-t-transparent rounded-full mx-auto mb-3"></div>
-                  <p className="text-gray-700 font-medium mb-2">브라우저 로그인을 기다리는 중...</p>
-                  <p className="text-xs text-gray-500 mb-4">
+                  <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-[var(--primary)] border-t-transparent"></div>
+                  <p className="mb-2 font-medium text-[var(--text-strong)]">브라우저 로그인을 기다리는 중...</p>
+                  <p className="mb-4 text-xs text-[var(--text-body)]">
                     아래 링크를 브라우저에서 열어 로그인을 진행하세요:
                   </p>
-                  <div className="flex items-center gap-2 mb-2 bg-gray-50 p-2 rounded-lg border border-gray-200">
+                  <div className="mb-2 flex items-center gap-2 rounded-xl border border-[rgba(186,195,233,0.52)] bg-[rgba(244,247,255,0.84)] p-2">
                     <input
                       type="text"
                       readOnly
                       value={authUrl}
-                      className="flex-1 bg-transparent border-none text-xs text-gray-600 focus:outline-none focus:ring-0 truncate"
+                      className="flex-1 truncate border-none bg-transparent text-xs text-[var(--text-body)] focus:outline-none focus:ring-0"
                     />
                     <button
                       onClick={() => {
@@ -195,10 +195,10 @@ export function AddAccountModal({
                             setError("클립보드를 사용할 수 없습니다. 링크를 직접 복사하세요.");
                           });
                       }}
-                      className={`px-3 py-1.5 border rounded text-xs font-medium transition-colors shrink-0 
+                      className={`shrink-0 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors 
                         ${copied
-                          ? "bg-green-50 border-green-200 text-green-700"
-                          : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                          ? "bg-[rgba(132,223,194,0.2)] border-[rgba(132,223,194,0.34)] text-[#2f8d76]"
+                          : "bg-white border-[rgba(186,195,233,0.52)] text-[var(--text-body)] hover:bg-[rgba(245,248,255,0.94)]"
                         }`}
                     >
                       {copied ? "복사됨" : "복사"}
@@ -207,13 +207,13 @@ export function AddAccountModal({
                       onClick={() => {
                         void openExternalUrl(authUrl);
                       }}
-                      className="px-3 py-1.5 bg-gray-900 border border-gray-900 rounded text-xs font-medium text-white hover:bg-gray-800 transition-colors shrink-0"
+                      className="btn-base btn-primary shrink-0 rounded-lg px-3 py-1.5 text-xs font-medium"
                     >
                       열기
                     </button>
                   </div>
                   {!tauriRuntime && (
-                    <p className="text-xs text-amber-600">
+                    <p className="text-xs text-[#946326]">
                       콜백 주소가 `localhost`로 돌아오기 때문에 OAuth 로그인도 같은 기기에서 완료해야 합니다.
                     </p>
                   )}
@@ -228,21 +228,21 @@ export function AddAccountModal({
 
           {activeTab === "import" && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="mb-2 block text-sm font-medium text-[var(--text-strong)]">
                 auth.json 파일 선택
               </label>
               <div className="flex gap-2">
-                <div className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600 truncate">
+                <div className="field-shell flex-1 truncate rounded-xl px-4 py-2.5 text-sm text-[var(--text-body)]">
                   {describeFileSource(fileSource)}
                 </div>
                 <button
                   onClick={handleSelectFile}
-                  className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 transition-colors whitespace-nowrap"
+                  className="btn-base btn-secondary whitespace-nowrap px-4 py-2.5 text-sm font-medium"
                 >
                   찾아보기...
                 </button>
               </div>
-              <p className="text-xs text-gray-400 mt-2">
+              <p className="mt-2 text-xs text-[var(--text-soft)]">
                 기존 Codex `auth.json` 파일에서 인증 정보를 가져옵니다
               </p>
             </div>
@@ -250,24 +250,24 @@ export function AddAccountModal({
 
           {/* Error */}
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+            <div className="rounded-xl border border-[rgba(255,159,184,0.42)] bg-[rgba(255,236,242,0.9)] p-3 text-sm text-[#c25778]">
               {error}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="flex gap-3 p-5 border-t border-gray-100">
+        <div className="soft-divider flex gap-3 border-t p-5">
           <button
             onClick={handleClose}
-            className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+            className="btn-base btn-secondary flex-1 px-4 py-2.5 text-sm font-medium"
           >
             취소
           </button>
           <button
             onClick={activeTab === "oauth" ? handleOAuthLogin : handleImportFile}
             disabled={isPrimaryDisabled}
-            className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors disabled:opacity-50"
+            className="btn-base btn-primary flex-1 px-4 py-2.5 text-sm font-medium disabled:opacity-50"
           >
             {loading
               ? "추가 중..."

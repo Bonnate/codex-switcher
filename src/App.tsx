@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
+import { getExhaustedRateLimits } from "./components/UsageBar";
 import type { CodexProcessInfo } from "./types";
 import {
   exportFullBackupFile,
+  hideWindowToTray,
   importFullBackupFile,
+  isTauriRuntime,
   invokeBackend,
   sendSystemNotification,
 } from "./lib/platform";
@@ -88,7 +91,6 @@ function App() {
     name: string;
     processCount: number;
   } | null>(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [processInfo, setProcessInfo] = useState<CodexProcessInfo | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingSlim, setIsExportingSlim] = useState(false);
@@ -107,6 +109,9 @@ function App() {
     "recommended_queue" | "deadline_asc" | "deadline_desc" | "remaining_desc" | "remaining_asc"
   >("recommended_queue");
   const [isOptionsMenuOpen, setIsOptionsMenuOpen] = useState(false);
+  const [isAccountManagerOpen, setIsAccountManagerOpen] = useState(false);
+  const [manageDeleteConfirmId, setManageDeleteConfirmId] = useState<string | null>(null);
+  const [manageDeleteBusyId, setManageDeleteBusyId] = useState<string | null>(null);
   const optionsMenuRef = useRef<HTMLDivElement | null>(null);
   const notifiedUsageAlertKeysRef = useRef<Set<string>>(new Set());
 
@@ -220,18 +225,15 @@ function App() {
     }
   };
 
-  const handleDelete = async (accountId: string) => {
-    if (deleteConfirmId !== accountId) {
-      setDeleteConfirmId(accountId);
-      setTimeout(() => setDeleteConfirmId(null), 3000);
-      return;
-    }
-
+  const handleManagedDelete = async (accountId: string) => {
     try {
+      setManageDeleteBusyId(accountId);
       await deleteAccount(accountId);
-      setDeleteConfirmId(null);
+      setManageDeleteConfirmId((current) => (current === accountId ? null : current));
     } catch (err) {
       console.error("Failed to delete account:", err);
+    } finally {
+      setManageDeleteBusyId(null);
     }
   };
 
@@ -599,30 +601,58 @@ function App() {
     });
   }, [otherAccounts, otherAccountsSort]);
 
+  const deadOtherAccounts = useMemo(() => {
+    const getDeadResetDeadline = (account: typeof otherAccounts[number]) => {
+      const exhaustedLimits = getExhaustedRateLimits(account.usage);
+      const resetTimes = exhaustedLimits
+        .map((limit) => limit.resetsAt ?? Number.POSITIVE_INFINITY);
+
+      return resetTimes.length > 0
+        ? Math.min(...resetTimes)
+        : Number.POSITIVE_INFINITY;
+    };
+
+    return sortedOtherAccounts
+      .filter((account) => getExhaustedRateLimits(account.usage).length > 0)
+      .sort((a, b) => {
+        const deadlineDiff = getDeadResetDeadline(a) - getDeadResetDeadline(b);
+        if (deadlineDiff !== 0) return deadlineDiff;
+        return a.name.localeCompare(b.name);
+      });
+  }, [otherAccounts, sortedOtherAccounts]);
+
+  const liveOtherAccounts = useMemo(
+    () =>
+      sortedOtherAccounts.filter(
+        (account) => getExhaustedRateLimits(account.usage).length === 0
+      ),
+    [sortedOtherAccounts]
+  );
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="app-shell">
       {/* Header */}
-      <header className="sticky top-0 z-40 bg-white border-b border-gray-200">
-        <div className="max-w-5xl mx-auto px-6 py-4">
+      <header className="app-header sticky top-0 z-40">
+        <div className="app-content mx-auto max-w-6xl px-6 py-4">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_max-content] md:items-center md:gap-4">
             <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="h-10 w-10 rounded-xl bg-gray-900 flex items-center justify-center text-white font-bold text-lg">
-                C
+              <div className="brand-mark">
+                <span>{">_"}</span>
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-xl font-bold text-gray-900 tracking-tight">
+                  <h1 className="text-[1.95rem] font-bold tracking-[-0.05em] text-[var(--text-strong)]">
                     Codex Switcher
                   </h1>
                   {processInfo && (
                     <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs border ${hasRunningProcesses
-                          ? "bg-amber-50 text-amber-700 border-amber-200"
-                          : "bg-green-50 text-green-700 border-green-200"
+                      className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium shadow-sm ${hasRunningProcesses
+                          ? "bg-[rgba(255,240,210,0.92)] text-[#97622a] border-[rgba(255,205,131,0.44)]"
+                          : "bg-[rgba(132,223,194,0.2)] text-[#2f8d76] border-[rgba(132,223,194,0.34)]"
                         }`}
                     >
                       <span
-                        className={`inline-block w-1.5 h-1.5 rounded-full ${hasRunningProcesses ? "bg-amber-500" : "bg-green-500"
+                        className={`inline-block h-1.5 w-1.5 rounded-full ${hasRunningProcesses ? "bg-[#ffbf66]" : "bg-[var(--mint)]"
                           }`}
                       ></span>
                       <span>
@@ -633,7 +663,7 @@ function App() {
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-gray-500">
+                <p className="text-sm text-[var(--text-body)]">
                   Codex CLI 멀티 계정 관리자
                 </p>
               </div>
@@ -643,7 +673,7 @@ function App() {
               <button
                 onClick={handleRefresh}
                 disabled={isRefreshing}
-                className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap"
+                className="btn-base btn-secondary h-11 shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium"
                 title="등록된 모든 계정의 사용량 정보를 다시 조회합니다.
 5시간 제한, 주간 제한, 크레딧 정보가 최신 값으로 갱신됩니다."
               >
@@ -652,7 +682,7 @@ function App() {
               <button
                 onClick={handleWarmupAll}
                 disabled={isWarmingAll || accounts.length === 0}
-                className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50 shrink-0 whitespace-nowrap"
+                className="btn-base btn-secondary h-11 shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium"
                 title="모든 계정으로 아주 작은 워밍업 요청을 보냅니다.
 계정 상태를 한 번 깨우거나 점검할 때 쓰는 보조 기능입니다.
 계정 전환에 꼭 필요한 기능은 아닙니다."
@@ -673,19 +703,19 @@ function App() {
                   onClick={() => {
                     setIsOptionsMenuOpen((prev) => !prev);
                   }}
-                  className="h-10 px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors shrink-0 whitespace-nowrap"
+                  className="btn-base btn-primary h-11 shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium"
                   title="계정 추가, 표시 설정, 백업, 텍스트 이동, 알림 설정을 한 곳에서 엽니다."
                 >
                   옵션 ▾
                 </button>
                 {isOptionsMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-60 rounded-xl border border-gray-200 bg-white shadow-xl p-2 z-50">
+                  <div className="menu-surface absolute right-0 z-50 mt-2 w-60 rounded-2xl p-2">
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
                         setIsAddModalOpen(true);
                       }}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
                       title="새 ChatGPT 계정을 로그인으로 추가하거나
 기존 auth.json 파일에서 계정을 가져옵니다."
                     >
@@ -693,12 +723,35 @@ function App() {
                     </button>
                     <button
                       onClick={() => {
+                        setManageDeleteConfirmId(null);
+                        setIsOptionsMenuOpen(false);
+                        setIsAccountManagerOpen(true);
+                      }}
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
+                      title="등록된 계정을 확인하고 이 메뉴에서만 계정을 제거합니다."
+                    >
+                      계정 관리
+                    </button>
+                    {isTauriRuntime() && (
+                      <button
+                        onClick={() => {
+                          setIsOptionsMenuOpen(false);
+                          void hideWindowToTray();
+                        }}
+                        className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
+                        title="현재 창을 숨기고 macOS 상단 트레이 아이콘에서 다시 열 수 있습니다."
+                      >
+                        트레이로 숨기기
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
                         setDraftPrivacyMode(privacyMode);
                         setDraftShowCredits(showCredits);
                         setIsOptionsMenuOpen(false);
                         setIsPrivacyModalOpen(true);
                       }}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
                       title="계정 이름과 이메일을 화면에 어떻게 표시할지 정합니다.
 전체 표시, 흐리게 숨기기, 앞 3글자만 표시 중에서 고를 수 있습니다."
                     >
@@ -710,7 +763,7 @@ function App() {
                         setIsOptionsMenuOpen(false);
                         setIsUsageAlertModalOpen(true);
                         }}
-                        className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700"
+                        className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
                         title="현재 사용 중인 계정의 사용량이 일정 수준 이하로 내려갔을 때
 Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       >
@@ -722,7 +775,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                         void handleExportSlimText();
                       }}
                       disabled={isExportingSlim}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm disabled:opacity-50"
                       title="등록된 계정을 긴 텍스트 형태로 내보냅니다.
 파일 없이 다른 기기로 옮길 때 쓸 수 있지만 민감 정보가 포함되므로 주의가 필요합니다."
                     >
@@ -734,7 +787,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                         openImportSlimTextModal();
                       }}
                       disabled={isImportingSlim}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm disabled:opacity-50"
                       title="다른 기기에서 내보낸 계정 텍스트를 붙여넣어 가져옵니다.
 기존 계정은 유지하고, 없는 계정만 추가합니다."
                     >
@@ -746,7 +799,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                         void handleExportFullFile();
                       }}
                       disabled={isExportingFull || !hasAccounts}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm disabled:opacity-50"
                       title="현재 등록된 계정 목록과 활성 계정 상태를
 .cswf 백업 파일로 저장합니다.
 다른 PC로 옮길 때 가장 권장되는 방식입니다."
@@ -759,7 +812,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                         void handleImportFullFile();
                       }}
                       disabled={isImportingFull}
-                      className="w-full text-left px-3 py-2 text-sm rounded-lg hover:bg-gray-100 text-gray-700 disabled:opacity-50"
+                      className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm disabled:opacity-50"
                       title=".cswf 백업 파일을 읽어 현재 기기에 계정을 복원합니다.
 이미 있는 계정은 유지하고, 없는 계정만 병합해서 추가합니다."
                     >
@@ -774,32 +827,32 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
       </header>
 
       {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-6 py-8">
+      <main className="app-content mx-auto max-w-6xl px-6 py-8">
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
-            <div className="animate-spin h-10 w-10 border-2 border-gray-900 border-t-transparent rounded-full mb-4"></div>
-            <p className="text-gray-500">계정을 불러오는 중...</p>
+            <div className="mb-4 h-10 w-10 animate-spin rounded-full border-2 border-[var(--primary)] border-t-transparent"></div>
+            <p className="text-[var(--text-body)]">계정을 불러오는 중...</p>
           </div>
         ) : error ? (
           <div className="text-center py-20">
-            <div className="text-red-600 mb-2">계정을 불러오지 못했습니다</div>
-            <p className="text-sm text-gray-500">{error}</p>
+            <div className="mb-2 text-[#d85978]">계정을 불러오지 못했습니다</div>
+            <p className="text-sm text-[var(--text-body)]">{error}</p>
           </div>
         ) : accounts.length === 0 ? (
-          <div className="text-center py-20">
-            <div className="h-16 w-16 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
+          <div className="glass-panel-strong mx-auto max-w-2xl text-center py-16 px-8">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[24px] bg-[linear-gradient(155deg,#c6c1ff_0%,#8caeff_46%,#5b68ff_100%)] text-white shadow-[0_16px_30px_rgba(106,124,234,0.2)]">
               <span className="text-3xl">👤</span>
             </div>
-            <h2 className="text-xl font-semibold text-gray-900 mb-2">
+            <h2 className="mb-2 text-xl font-semibold text-[var(--text-strong)]">
               아직 등록된 계정이 없습니다
             </h2>
-            <p className="text-gray-500 mb-6">
+            <p className="mb-6 text-[var(--text-body)]">
               첫 Codex 계정을 추가하거나 백업 파일을 복원하세요
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <button
                 onClick={() => setIsAddModalOpen(true)}
-                className="px-6 py-3 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                className="btn-base btn-primary px-6 py-3 text-sm font-medium"
               >
                 계정 추가
               </button>
@@ -808,7 +861,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   void handleImportFullFile();
                 }}
                 disabled={isImportingFull}
-                className="px-6 py-3 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors disabled:opacity-50"
+                className="btn-base btn-secondary px-6 py-3 text-sm font-medium disabled:opacity-50"
               >
                 {isImportingFull ? "복원 중..." : "백업 복원"}
               </button>
@@ -819,7 +872,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
             {/* Active Account */}
             {activeAccount && (
               <section>
-                <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">
+                <h2 className="section-label mb-4">
                   현재 사용 중인 계정
                 </h2>
                 <AccountCard
@@ -831,7 +884,6 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   onWarmup={() =>
                     handleWarmupAccount(activeAccount.id, activeAccount.name)
                   }
-                  onDelete={() => handleDelete(activeAccount.id)}
                   onRefresh={() => refreshSingleUsage(activeAccount.id)}
                       onRename={(newName) => renameAccount(activeAccount.id, newName)}
                       switching={switchingId === activeAccount.id}
@@ -846,14 +898,14 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
             )}
 
             {/* Other Accounts */}
-            {otherAccounts.length > 0 && (
+            {liveOtherAccounts.length > 0 && (
               <section>
                 <div className="flex items-center justify-between gap-3 mb-4">
-                  <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider">
-                    다른 계정 ({otherAccounts.length})
+                  <h2 className="section-label">
+                    다른 계정 ({liveOtherAccounts.length})
                   </h2>
                   <div className="flex items-center gap-2">
-                    <label htmlFor="other-accounts-sort" className="text-xs text-gray-500">
+                    <label htmlFor="other-accounts-sort" className="text-xs text-[var(--text-body)]">
                       정렬
                     </label>
                     <div className="relative">
@@ -870,7 +922,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                               | "remaining_asc"
                           )
                         }
-                        className="appearance-none font-sans text-xs sm:text-sm font-medium pl-3 pr-9 py-2 rounded-xl border border-gray-300 bg-gradient-to-b from-white to-gray-50 text-gray-700 shadow-sm hover:border-gray-400 hover:shadow focus:outline-none focus:ring-2 focus:ring-gray-300 focus:border-gray-400 transition-all"
+                        className="select-shell appearance-none font-sans text-xs sm:text-sm font-medium pl-3 pr-9 py-2 rounded-xl shadow-sm transition-all"
                       >
                         <option value="recommended_queue">추천 대기열 순</option>
                         <option value="deadline_asc">리셋 빠른 순</option>
@@ -882,7 +934,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                           남은 비율 낮은 순
                         </option>
                       </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[var(--text-body)]">
                         <svg
                           className="h-4 w-4"
                           viewBox="0 0 20 20"
@@ -899,14 +951,13 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {sortedOtherAccounts.map((account) => (
+                  {liveOtherAccounts.map((account) => (
                     <AccountCard
                       key={account.id}
                       account={account}
                       onSwitch={() => handleSwitch(account.id)}
                       onForceSwitch={() => openForceSwitchDialog(account.id, account.name)}
                       onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                      onDelete={() => handleDelete(account.id)}
                       onRefresh={() => refreshSingleUsage(account.id)}
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}
@@ -921,13 +972,45 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                 </div>
               </section>
             )}
+
+            {deadOtherAccounts.length > 0 && (
+              <section>
+                <div className="mb-4">
+                  <h2 className="section-label">
+                    재사용 대기 중 ({deadOtherAccounts.length})
+                  </h2>
+                </div>
+                <div className="dead-panel p-4 md:p-5">
+                  <div className="grid grid-cols-1 gap-4">
+                    {deadOtherAccounts.map((account) => (
+                      <AccountCard
+                        key={account.id}
+                        account={account}
+                        onSwitch={() => handleSwitch(account.id)}
+                        onForceSwitch={() => openForceSwitchDialog(account.id, account.name)}
+                        onWarmup={() => handleWarmupAccount(account.id, account.name)}
+                        onRefresh={() => refreshSingleUsage(account.id)}
+                        onRename={(newName) => renameAccount(account.id, newName)}
+                        switching={switchingId === account.id}
+                        switchDisabled={hasRunningProcesses ?? false}
+                        warmingUp={isWarmingAll || warmingUpId === account.id}
+                        masked={maskedAccounts.has(account.id)}
+                        privacyMode={privacyMode}
+                        showCredits={showCredits}
+                        onToggleMask={() => toggleMask(account.id)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
           </div>
         )}
       </main>
 
       {/* Refresh Success Toast */}
       {refreshSuccess && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-3 bg-green-600 text-white rounded-lg shadow-lg text-sm flex items-center gap-2">
+        <div className="toast-success fixed bottom-6 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-2xl px-4 py-3 text-sm">
           <span>✓</span> 사용량을 새로고침했습니다
         </div>
       )}
@@ -935,20 +1018,13 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
       {/* Warm-up Toast */}
       {warmupToast && (
         <div
-          className={`fixed bottom-20 left-1/2 -translate-x-1/2 px-4 py-3 rounded-lg shadow-lg text-sm ${
+          className={`fixed bottom-20 left-1/2 -translate-x-1/2 rounded-2xl px-4 py-3 text-sm ${
             warmupToast.isError
-              ? "bg-red-600 text-white"
-              : "bg-amber-100 text-amber-900 border border-amber-300"
+              ? "toast-error"
+              : "toast-warning"
           }`}
         >
           {warmupToast.message}
-        </div>
-      )}
-
-      {/* Delete Confirmation Toast */}
-      {deleteConfirmId && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-3 bg-red-600 text-white rounded-lg shadow-lg text-sm">
-          삭제하려면 한 번 더 누르세요
         </div>
       )}
 
@@ -962,41 +1038,125 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
         onCancelOAuth={cancelOAuthLogin}
       />
 
+      {isAccountManagerOpen && (
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+          <div className="modal-surface mx-4 w-full max-w-2xl rounded-[28px]">
+            <div className="soft-divider flex items-center justify-between border-b p-5">
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--text-strong)]">계정 관리</h2>
+                <p className="mt-1 text-sm text-[var(--text-body)]">
+                  계정 제거는 이 메뉴에서만 할 수 있습니다.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setManageDeleteConfirmId(null);
+                  setIsAccountManagerOpen(false);
+                }}
+                className="text-[var(--text-soft)] transition-colors hover:text-[var(--primary-strong)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+              {accounts.map((account) => {
+                const isConfirming = manageDeleteConfirmId === account.id;
+                const isDeleting = manageDeleteBusyId === account.id;
+
+                return (
+                  <div
+                    key={account.id}
+                    className="option-card flex items-center justify-between gap-4 rounded-2xl px-4 py-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-medium text-[var(--text-strong)]">
+                          {account.name}
+                        </p>
+                        {account.is_active && (
+                          <span className="inline-flex items-center rounded-full border border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.2)] px-2 py-0.5 text-[11px] font-medium text-[#2f8d76]">
+                            현재 사용 중
+                          </span>
+                        )}
+                      </div>
+                      {account.email && (
+                        <p className="truncate text-sm text-[var(--text-body)]">{account.email}</p>
+                      )}
+                    </div>
+
+                    <div className="shrink-0 flex items-center gap-2">
+                      {isConfirming ? (
+                        <>
+                          <button
+                            onClick={() => setManageDeleteConfirmId(null)}
+                            disabled={isDeleting}
+                            className="btn-base btn-secondary px-3 py-2 text-sm disabled:opacity-50"
+                          >
+                            취소
+                          </button>
+                          <button
+                            onClick={() => {
+                              void handleManagedDelete(account.id);
+                            }}
+                            disabled={isDeleting}
+                            className="btn-base btn-danger px-3 py-2 text-sm disabled:opacity-50"
+                          >
+                            {isDeleting ? "제거 중..." : "정말 제거"}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setManageDeleteConfirmId(account.id)}
+                          className="btn-base btn-danger px-3 py-2 text-sm"
+                        >
+                          제거
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {forceSwitchTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-lg mx-4 shadow-xl">
-            <div className="p-5 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-900">강제 전환</h2>
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+          <div className="modal-surface mx-4 w-full max-w-lg rounded-[28px]">
+            <div className="soft-divider border-b p-5">
+              <h2 className="text-lg font-semibold text-[var(--text-strong)]">강제 전환</h2>
             </div>
             <div className="p-5 space-y-4">
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+              <div className="rounded-2xl border border-[rgba(255,205,131,0.45)] bg-[rgba(255,243,218,0.9)] px-4 py-3 text-[#8a5c23]">
                 <p className="text-sm font-medium">실행 중인 Codex 세션이 강제로 종료됩니다.</p>
                 <p className="text-sm mt-1">
                   저장되지 않은 작업, 진행 중인 응답, 현재 콘솔 세션 내용이 사라질 수 있습니다.
                 </p>
               </div>
-              <div className="space-y-2 text-sm text-gray-700">
+              <div className="space-y-2 text-sm text-[var(--text-body)]">
                 <p>
-                  전환 대상: <span className="font-medium text-gray-900">{forceSwitchTarget.name}</span>
+                  전환 대상: <span className="font-medium text-[var(--text-strong)]">{forceSwitchTarget.name}</span>
                 </p>
                 <p>
                   종료 예정인 Codex 프로세스:{" "}
-                  <span className="font-medium text-gray-900">{forceSwitchTarget.processCount}개</span>
+                  <span className="font-medium text-[var(--text-strong)]">{forceSwitchTarget.processCount}개</span>
                 </p>
                 <p>계속 진행하면 실행 중인 Codex를 종료한 뒤 이 계정으로 즉시 전환합니다.</p>
               </div>
             </div>
-            <div className="flex gap-3 p-5 border-t border-gray-100">
+            <div className="soft-divider flex gap-3 border-t p-5">
               <button
                 onClick={() => setForceSwitchTarget(null)}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
               >
                 취소
               </button>
               <button
                 onClick={confirmForceSwitch}
                 disabled={switchingId === forceSwitchTarget.id}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition-colors disabled:opacity-50"
+                className="btn-base btn-accent px-4 py-2.5 text-sm font-medium disabled:opacity-50"
               >
                 {switchingId === forceSwitchTarget.id ? "강제 전환 중..." : "종료 후 전환"}
               </button>
@@ -1006,24 +1166,24 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
       )}
 
       {isPrivacyModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 shadow-xl">
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-900">표시 설정</h2>
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+          <div className="modal-surface mx-4 w-full max-w-md rounded-[28px]">
+            <div className="soft-divider flex items-center justify-between border-b p-5">
+              <h2 className="text-lg font-semibold text-[var(--text-strong)]">표시 설정</h2>
               <button
                 onClick={() => setIsPrivacyModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-[var(--text-soft)] transition-colors hover:text-[var(--primary-strong)]"
               >
                 ✕
               </button>
             </div>
 
             <div className="p-5 space-y-4">
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-[var(--text-body)]">
                 모든 계정 카드에 공통으로 적용되는 이름/이메일 표시 방식입니다.
               </p>
 
-              <label className="flex items-start gap-3 rounded-xl border border-gray-200 p-4 cursor-pointer hover:border-gray-300">
+              <label className="option-card flex cursor-pointer items-start gap-3 rounded-2xl p-4">
                 <input
                   type="radio"
                   name="privacy-mode"
@@ -1032,14 +1192,14 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   className="mt-1"
                 />
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-900">전체 표시</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm font-medium text-[var(--text-strong)]">전체 표시</p>
+                  <p className="text-sm text-[var(--text-body)]">
                     계정 이름과 이메일을 원래대로 모두 표시합니다.
                   </p>
                 </div>
               </label>
 
-              <label className="flex items-start gap-3 rounded-xl border border-gray-200 p-4 cursor-pointer hover:border-gray-300">
+              <label className="option-card flex cursor-pointer items-start gap-3 rounded-2xl p-4">
                 <input
                   type="radio"
                   name="privacy-mode"
@@ -1048,14 +1208,14 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   className="mt-1"
                 />
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-900">흐리게 숨기기</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm font-medium text-[var(--text-strong)]">흐리게 숨기기</p>
+                  <p className="text-sm text-[var(--text-body)]">
                     정보는 남겨 두되 바로 읽기 어렵게 흐리게 표시합니다.
                   </p>
                 </div>
               </label>
 
-              <label className="flex items-start gap-3 rounded-xl border border-gray-200 p-4 cursor-pointer hover:border-gray-300">
+              <label className="option-card flex cursor-pointer items-start gap-3 rounded-2xl p-4">
                 <input
                   type="radio"
                   name="privacy-mode"
@@ -1064,17 +1224,17 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   className="mt-1"
                 />
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-900">앞 3글자만 표시</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm font-medium text-[var(--text-strong)]">앞 3글자만 표시</p>
+                  <p className="text-sm text-[var(--text-body)]">
                     이름과 이메일의 앞 3글자만 보여주고 나머지는 `***`로 가립니다.
                   </p>
                 </div>
               </label>
 
-              <div className="flex items-start justify-between gap-4 rounded-xl border border-gray-200 p-4">
+              <div className="option-card flex items-start justify-between gap-4 rounded-2xl p-4">
                 <div className="space-y-1">
-                  <p className="text-sm font-medium text-gray-900">크레딧 표시</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm font-medium text-[var(--text-strong)]">크레딧 표시</p>
+                  <p className="text-sm text-[var(--text-body)]">
                     계정 카드 아래의 `크레딧: ...` 표시를 보이거나 숨깁니다.
                   </p>
                 </div>
@@ -1085,23 +1245,23 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                     checked={draftShowCredits}
                     onChange={(e) => setDraftShowCredits(e.target.checked)}
                   />
-                  <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-gray-900">
+                  <span className="toggle-track relative h-6 w-11 rounded-full transition">
                     <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
                   </span>
                 </label>
               </div>
             </div>
 
-            <div className="flex gap-3 p-5 border-t border-gray-100">
+            <div className="soft-divider flex gap-3 border-t p-5">
               <button
                 onClick={() => setIsPrivacyModalOpen(false)}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
               >
                 취소
               </button>
               <button
                 onClick={savePrivacySettings}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                className="btn-base btn-primary px-4 py-2.5 text-sm font-medium"
               >
                 저장
               </button>
@@ -1111,13 +1271,13 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
       )}
 
       {isUsageAlertModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md mx-4 shadow-xl">
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-900">사용량 알림 설정</h2>
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+          <div className="modal-surface mx-4 w-full max-w-md rounded-[28px]">
+            <div className="soft-divider flex items-center justify-between border-b p-5">
+              <h2 className="text-lg font-semibold text-[var(--text-strong)]">사용량 알림 설정</h2>
               <button
                 onClick={() => setIsUsageAlertModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-[var(--text-soft)] transition-colors hover:text-[var(--primary-strong)]"
               >
                 ✕
               </button>
@@ -1126,8 +1286,8 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
             <div className="p-5 space-y-5">
               <div className="flex items-start justify-between gap-4">
                   <div className="space-y-1">
-                    <p className="text-sm font-medium text-gray-900">현재 사용 중인 계정 알림</p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-sm font-medium text-[var(--text-strong)]">현재 사용 중인 계정 알림</p>
+                    <p className="text-sm text-[var(--text-body)]">
                       활성 계정의 5시간 제한 또는 주간 제한이 기준 이하로 내려가면 Windows/macOS 시스템 알림을 표시합니다.
                     </p>
                   </div>
@@ -1143,14 +1303,14 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       }))
                     }
                   />
-                  <span className="relative h-6 w-11 rounded-full bg-gray-200 transition peer-checked:bg-gray-900">
+                  <span className="toggle-track relative h-6 w-11 rounded-full transition">
                     <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition peer-checked:translate-x-5" />
                   </span>
                 </label>
               </div>
 
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700">
+                <label className="block text-sm font-medium text-[var(--text-strong)]">
                   알림 기준
                 </label>
                 <div className="flex items-center gap-3">
@@ -1181,32 +1341,32 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       }))
                     }
                     disabled={!draftUsageAlertSettings.enabled}
-                    className="w-20 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-900 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 disabled:bg-gray-100 disabled:text-gray-400"
+                    className="field-shell w-20 rounded-lg px-3 py-2 text-sm disabled:bg-[rgba(230,235,247,0.84)] disabled:text-[var(--text-soft)]"
                   />
-                  <span className="text-sm text-gray-500">%</span>
+                  <span className="text-sm text-[var(--text-body)]">%</span>
                   </div>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-[var(--text-body)]">
                     예: `20%`로 설정하면 남은 사용량이 20% 이하가 되는 순간 시스템 알림을 표시합니다.
                   </p>
                 </div>
             </div>
 
-              <div className="flex gap-3 p-5 border-t border-gray-100">
+              <div className="soft-divider flex gap-3 border-t p-5">
                 <button
                   onClick={() => setIsUsageAlertModalOpen(false)}
-                  className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                  className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
                 >
                   취소
                 </button>
                 <button
                   onClick={testUsageAlert}
-                  className="px-4 py-2.5 text-sm font-medium rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
+                  className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
                 >
                   테스트 알림
                 </button>
                 <button
                   onClick={saveUsageAlertSettings}
-                  className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                  className="btn-base btn-primary px-4 py-2.5 text-sm font-medium"
                 >
                   저장
               </button>
@@ -1217,26 +1377,26 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
 
       {/* Import/Export Config Modal */}
       {isConfigModalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-2xl mx-4 shadow-xl">
-            <div className="flex items-center justify-between p-5 border-b border-gray-100">
-              <h2 className="text-lg font-semibold text-gray-900">
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+          <div className="modal-surface mx-4 w-full max-w-2xl rounded-[28px]">
+            <div className="soft-divider flex items-center justify-between border-b p-5">
+              <h2 className="text-lg font-semibold text-[var(--text-strong)]">
                 {configModalMode === "slim_export" ? "텍스트로 계정 내보내기" : "텍스트로 계정 가져오기"}
               </h2>
               <button
                 onClick={() => setIsConfigModalOpen(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
+                className="text-[var(--text-soft)] transition-colors hover:text-[var(--primary-strong)]"
               >
                 ✕
               </button>
             </div>
             <div className="p-5 space-y-4">
               {configModalMode === "slim_import" ? (
-                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <p className="rounded-xl border border-[rgba(255,205,131,0.45)] bg-[rgba(255,243,218,0.9)] px-3 py-2 text-sm text-[#8a5c23]">
                   기존 계정은 그대로 두고, 없는 계정만 텍스트에서 추가로 가져옵니다.
                 </p>
               ) : (
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-[var(--text-body)]">
                   이 텍스트에는 계정 인증 정보가 들어 있습니다. 메신저나 메모장에 남기지 말고 바로 옮기는 용도로만 사용하세요.
                 </p>
               )}
@@ -1251,18 +1411,18 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       : "내보낸 계정 텍스트가 여기에 표시됩니다"
                     : "가져올 계정 텍스트를 여기에 붙여넣으세요"
                 }
-                className="w-full h-48 px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-400 focus:ring-1 focus:ring-gray-400 font-mono"
+                className="textarea-shell h-48 w-full rounded-2xl px-4 py-3 font-mono text-sm"
               />
               {configModalError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+                <div className="rounded-xl border border-[rgba(255,159,184,0.42)] bg-[rgba(255,236,242,0.9)] p-3 text-sm text-[#c25778]">
                   {configModalError}
                 </div>
               )}
             </div>
-            <div className="flex gap-3 p-5 border-t border-gray-100">
+            <div className="soft-divider flex gap-3 border-t p-5">
               <button
                 onClick={() => setIsConfigModalOpen(false)}
-                className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
+                className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
               >
                 닫기
               </button>
@@ -1279,7 +1439,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                     }
                   }}
                   disabled={!configPayload || isExportingSlim}
-                  className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors disabled:opacity-50"
+                  className="btn-base btn-primary px-4 py-2.5 text-sm font-medium disabled:opacity-50"
                 >
                   {configCopied ? "복사됨" : "텍스트 복사"}
                 </button>
@@ -1287,7 +1447,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                 <button
                   onClick={handleImportSlimText}
                   disabled={isImportingSlim}
-                  className="px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors disabled:opacity-50"
+                  className="btn-base btn-primary px-4 py-2.5 text-sm font-medium disabled:opacity-50"
                 >
                   {isImportingSlim ? "불러오는 중..." : "없는 계정만 추가"}
                 </button>

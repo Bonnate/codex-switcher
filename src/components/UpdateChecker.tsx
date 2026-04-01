@@ -97,15 +97,15 @@ export function UpdateChecker() {
 
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 max-w-md w-full px-4">
-      <div className="bg-white border border-gray-200 rounded-xl shadow-xl p-4">
+      <div className="modal-surface rounded-3xl p-4">
         {status.kind === "available" && (
           <div className="flex items-start gap-3">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900">
+              <p className="text-sm font-medium text-[var(--text-strong)]">
                 업데이트 उपलब्ध: v{status.update.version}
               </p>
               {status.update.body && (
-                <p className="text-xs text-gray-500 mt-0.5 truncate">
+                <p className="mt-0.5 truncate text-xs text-[var(--text-body)]">
                   {status.update.body}
                 </p>
               )}
@@ -113,13 +113,13 @@ export function UpdateChecker() {
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                className="btn-base btn-secondary px-3 py-1.5 text-xs font-medium"
               >
                 나중에
               </button>
               <button
                 onClick={handleDownloadAndInstall}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                className="btn-base btn-primary px-3 py-1.5 text-xs font-medium"
               >
                 업데이트
               </button>
@@ -130,15 +130,15 @@ export function UpdateChecker() {
         {status.kind === "downloading" && (
           <div>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-gray-900">업데이트 다운로드 중...</p>
-              <p className="text-xs text-gray-500">
+              <p className="text-sm font-medium text-[var(--text-strong)]">업데이트 다운로드 중...</p>
+              <p className="text-xs text-[var(--text-body)]">
                 {formatBytes(status.downloaded)}
                 {status.total ? ` / ${formatBytes(status.total)}` : ""}
               </p>
             </div>
-            <div className="w-full bg-gray-100 rounded-full h-1.5">
+            <div className="h-2 w-full rounded-full bg-[rgba(224,231,248,0.9)]">
               <div
-                className="bg-gray-900 h-1.5 rounded-full transition-all duration-300"
+                className="h-2 rounded-full bg-[linear-gradient(90deg,#8fbbff_0%,#6f82ff_55%,#7f70ff_100%)] transition-all duration-300"
                 style={{
                   width:
                     status.total && status.total > 0
@@ -152,19 +152,19 @@ export function UpdateChecker() {
 
         {status.kind === "ready" && (
           <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-gray-900">
+            <p className="text-sm font-medium text-[var(--text-strong)]">
               업데이트 준비가 끝났습니다. 다시 시작해 적용하세요.
             </p>
             <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={() => setDismissed(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors"
+                className="btn-base btn-secondary px-3 py-1.5 text-xs font-medium"
               >
                 나중에
               </button>
               <button
                 onClick={handleRelaunch}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 text-white transition-colors"
+                className="btn-base btn-primary px-3 py-1.5 text-xs font-medium"
               >
                 다시 시작
               </button>
@@ -174,12 +174,12 @@ export function UpdateChecker() {
 
         {status.kind === "error" && (
           <div className="flex items-center justify-between">
-            <p className="text-sm text-red-600">
+            <p className="text-sm text-[#c25778]">
               업데이트에 실패했습니다: {status.message}
             </p>
             <button
               onClick={() => setDismissed(true)}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors shrink-0 ml-2"
+              className="btn-base btn-secondary ml-2 shrink-0 px-3 py-1.5 text-xs font-medium"
             >
               닫기
             </button>
