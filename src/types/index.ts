@@ -72,7 +72,9 @@ export interface TokenReportDay {
 export interface TokenReportSession {
   session_id: string;
   cwd: string | null;
+  cwd_preview: string | null;
   model_provider: string | null;
+  device_name: string | null;
   started_at: string | null;
   updated_at: string | null;
   total_usage: TokenUsageBreakdown;
@@ -80,6 +82,11 @@ export interface TokenReportSession {
 }
 
 export interface TokenReportSummary {
+  source_kind: "local" | "synced";
+  source_label: string;
+  device_count: number;
+  last_sync_at: string | null;
+  warning_count: number;
   sessions_root: string;
   scanned_session_files: number;
   sessions_with_usage: number;
@@ -88,7 +95,41 @@ export interface TokenReportSummary {
   last_7_days: TokenReportWindow;
   last_30_days: TokenReportWindow;
   daily_last_7_days: TokenReportDay[];
+  daily_last_35_days: TokenReportDay[];
   recent_sessions: TokenReportSession[];
+}
+
+export type UsageSyncAuthMode = "system" | "ssh_key_file" | "github_pat";
+
+export interface UsageSyncSettings {
+  repo_url: string;
+  branch: string;
+  device_id: string;
+  device_name: string;
+  report_timezone: string;
+  git_auth_mode: UsageSyncAuthMode;
+  git_username: string;
+  ssh_private_key_path: string;
+}
+
+export interface UsageSyncStatus {
+  configured: boolean;
+  git_available: boolean;
+  cache_available: boolean;
+  device_count: number;
+  warning_count: number;
+  last_sync_at: string | null;
+}
+
+export interface SyncedTokenReportCache {
+  status: UsageSyncStatus;
+  report: TokenReportSummary | null;
+  warnings: string[];
+}
+
+export interface UsageSyncSecureSecrets {
+  git_access_token: string | null;
+  sync_passphrase: string | null;
 }
 
 export interface ImportAccountsSummary {

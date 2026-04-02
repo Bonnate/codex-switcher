@@ -277,7 +277,9 @@ pub struct TokenReportDay {
 pub struct TokenReportSession {
     pub session_id: String,
     pub cwd: Option<String>,
+    pub cwd_preview: Option<String>,
     pub model_provider: Option<String>,
+    pub device_name: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub total_usage: TokenUsageBreakdown,
@@ -287,6 +289,11 @@ pub struct TokenReportSession {
 /// Summary returned to the frontend for local token usage reporting
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenReportSummary {
+    pub source_kind: String,
+    pub source_label: String,
+    pub device_count: usize,
+    pub last_sync_at: Option<DateTime<Utc>>,
+    pub warning_count: usize,
     pub sessions_root: String,
     pub scanned_session_files: usize,
     pub sessions_with_usage: usize,
@@ -295,7 +302,80 @@ pub struct TokenReportSummary {
     pub last_7_days: TokenReportWindow,
     pub last_30_days: TokenReportWindow,
     pub daily_last_7_days: Vec<TokenReportDay>,
+    pub daily_last_35_days: Vec<TokenReportDay>,
     pub recent_sessions: Vec<TokenReportSession>,
+}
+
+/// Usage sync settings stored locally for encrypted Git-based usage sync
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageSyncAuthMode {
+    System,
+    SshKeyFile,
+    GithubPat,
+}
+
+impl Default for UsageSyncAuthMode {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+/// Usage sync settings stored locally for encrypted Git-based usage sync
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSyncSettings {
+    pub repo_url: String,
+    pub branch: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub report_timezone: String,
+    #[serde(default)]
+    pub git_auth_mode: UsageSyncAuthMode,
+    #[serde(default)]
+    pub git_username: String,
+    #[serde(default)]
+    pub ssh_private_key_path: String,
+}
+
+/// One device snapshot written to the sync repo
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSyncSnapshot {
+    pub version: u8,
+    pub device_id: String,
+    pub device_name: String,
+    pub generated_at: DateTime<Utc>,
+    pub report_timezone: String,
+    pub today: TokenReportWindow,
+    pub last_7_days: TokenReportWindow,
+    pub last_30_days: TokenReportWindow,
+    pub daily_last_35_days: Vec<TokenReportDay>,
+    pub recent_sessions: Vec<TokenReportSession>,
+}
+
+/// Current status for the usage sync feature
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSyncStatus {
+    pub configured: bool,
+    pub git_available: bool,
+    pub cache_available: bool,
+    pub device_count: usize,
+    pub warning_count: usize,
+    pub last_sync_at: Option<DateTime<Utc>>,
+}
+
+/// Cached merged token report from synced device snapshots
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncedTokenReportCache {
+    pub status: UsageSyncStatus,
+    pub report: Option<TokenReportSummary>,
+    pub warnings: Vec<String>,
+}
+
+/// Secrets stored in the OS credential vault for usage sync convenience
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSyncSecureSecrets {
+    pub git_access_token: Option<String>,
+    pub sync_passphrase: Option<String>,
 }
 
 /// Import summary for account config import operations.

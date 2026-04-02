@@ -2,13 +2,15 @@
 
 use crate::api::usage::{get_account_usage, refresh_all_usage, warmup_account as send_warmup};
 use crate::auth::{get_account, load_accounts};
+use crate::commands::usage_sync::load_or_create_usage_sync_settings;
 use crate::types::{
     TokenReportDay, TokenReportSession, TokenReportSummary, TokenReportWindow,
     TokenUsageBreakdown, UsageInfo, WarmupSummary,
 };
 
 use anyhow::Context;
-use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use chrono_tz::Tz;
 use futures::{stream, StreamExt};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -19,6 +21,7 @@ use std::path::{Path, PathBuf};
 const TOKEN_REPORT_RECENT_SESSION_LIMIT: usize = 12;
 const TOKEN_REPORT_LAST_7_DAYS: i64 = 7;
 const TOKEN_REPORT_LAST_30_DAYS: i64 = 30;
+const TOKEN_REPORT_LAST_35_DAYS: i64 = 35;
 
 #[derive(Debug)]
 struct TokenDeltaEvent {
@@ -53,11 +56,25 @@ pub async fn refresh_all_accounts_usage() -> Result<Vec<UsageInfo>, String> {
 /// Read local Codex session logs and summarize token usage
 #[tauri::command]
 pub async fn get_token_report() -> Result<TokenReportSummary, String> {
-    let sessions_root = dirs::home_dir()
-        .map(|path| path.join(".codex").join("sessions"))
-        .ok_or_else(|| "사용자 홈 디렉터리를 찾을 수 없습니다.".to_string())?;
+    let sessions_root = default_token_sessions_root().map_err(|e| e.to_string())?;
+    let report_timezone = load_or_create_usage_sync_settings()
+        .map(|settings| settings.report_timezone)
+        .unwrap_or_else(|_| default_token_report_timezone());
+    let timezone = report_timezone
+        .parse::<Tz>()
+        .unwrap_or(chrono_tz::UTC);
 
-    tokio::task::spawn_blocking(move || build_token_report(sessions_root))
+    tokio::task::spawn_blocking(move || {
+        build_token_report_from_sessions_root(
+            sessions_root,
+            &timezone,
+            "local",
+            "이 기기 로그",
+            1,
+            None,
+            0,
+        )
+    })
         .await
         .map_err(|error| format!("토큰 리포트를 읽는 작업이 중단되었습니다: {error}"))?
         .map_err(|error| error.to_string())
@@ -103,17 +120,54 @@ pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
     })
 }
 
-fn build_token_report(sessions_root: PathBuf) -> anyhow::Result<TokenReportSummary> {
+pub(crate) fn default_token_sessions_root() -> anyhow::Result<PathBuf> {
+    dirs::home_dir()
+        .map(|path| path.join(".codex").join("sessions"))
+        .ok_or_else(|| anyhow::anyhow!("사용자 홈 디렉터리를 찾을 수 없습니다."))
+}
+
+pub(crate) fn default_token_report_timezone() -> String {
+    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string())
+}
+
+pub(crate) fn format_path_preview(value: &str) -> String {
+    let parts = value
+        .split(['\\', '/'])
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() <= 3 {
+        return value.to_string();
+    }
+
+    format!(".../{}", parts[parts.len() - 3..].join("/"))
+}
+
+pub(crate) fn build_token_report_from_sessions_root(
+    sessions_root: PathBuf,
+    report_timezone: &Tz,
+    source_kind: &str,
+    source_label: &str,
+    device_count: usize,
+    last_sync_at: Option<DateTime<Utc>>,
+    warning_count: usize,
+) -> anyhow::Result<TokenReportSummary> {
     let generated_at = Utc::now();
-    let today = Local::now().date_naive();
+    let today = generated_at.with_timezone(report_timezone).date_naive();
     let last_7_days_start = today - Duration::days(TOKEN_REPORT_LAST_7_DAYS - 1);
     let last_30_days_start = today - Duration::days(TOKEN_REPORT_LAST_30_DAYS - 1);
+    let last_35_days_start = today - Duration::days(TOKEN_REPORT_LAST_35_DAYS - 1);
 
     if !sessions_root.exists() {
         return Ok(empty_token_report(
             sessions_root,
             generated_at,
             last_7_days_start,
+            last_35_days_start,
+            source_kind,
+            source_label,
+            device_count,
+            last_sync_at,
+            warning_count,
         ));
     }
 
@@ -130,7 +184,7 @@ fn build_token_report(sessions_root: PathBuf) -> anyhow::Result<TokenReportSumma
     let scanned_session_files = session_files.len();
 
     for session_file in session_files {
-        let parsed = parse_session_file(&session_file)
+        let parsed = parse_session_file(&session_file, report_timezone)
             .with_context(|| format!("Failed to parse {}", session_file.display()))?;
 
         for event in parsed.delta_events {
@@ -169,15 +223,25 @@ fn build_token_report(sessions_root: PathBuf) -> anyhow::Result<TokenReportSumma
     recent_sessions.truncate(TOKEN_REPORT_RECENT_SESSION_LIMIT);
 
     let mut daily_last_7_days = Vec::new();
-    for offset in 0..TOKEN_REPORT_LAST_7_DAYS {
-        let date = last_7_days_start + Duration::days(offset);
-        daily_last_7_days.push(TokenReportDay {
+    let mut daily_last_35_days = Vec::new();
+    for offset in 0..TOKEN_REPORT_LAST_35_DAYS {
+        let date = last_35_days_start + Duration::days(offset);
+        let day = TokenReportDay {
             date: date.format("%Y-%m-%d").to_string(),
             total_usage: daily_usage.get(&date).cloned().unwrap_or_default(),
-        });
+        };
+        if date >= last_7_days_start {
+            daily_last_7_days.push(day.clone());
+        }
+        daily_last_35_days.push(day);
     }
 
     Ok(TokenReportSummary {
+        source_kind: source_kind.to_string(),
+        source_label: source_label.to_string(),
+        device_count,
+        last_sync_at,
+        warning_count,
         sessions_root: sessions_root.display().to_string(),
         scanned_session_files,
         sessions_with_usage,
@@ -195,6 +259,7 @@ fn build_token_report(sessions_root: PathBuf) -> anyhow::Result<TokenReportSumma
             total_usage: last_30_days_usage,
         },
         daily_last_7_days,
+        daily_last_35_days,
         recent_sessions,
     })
 }
@@ -203,17 +268,33 @@ fn empty_token_report(
     sessions_root: PathBuf,
     generated_at: DateTime<Utc>,
     last_7_days_start: NaiveDate,
+    last_35_days_start: NaiveDate,
+    source_kind: &str,
+    source_label: &str,
+    device_count: usize,
+    last_sync_at: Option<DateTime<Utc>>,
+    warning_count: usize,
 ) -> TokenReportSummary {
     let mut daily_last_7_days = Vec::new();
-    for offset in 0..TOKEN_REPORT_LAST_7_DAYS {
-        let date = last_7_days_start + Duration::days(offset);
-        daily_last_7_days.push(TokenReportDay {
+    let mut daily_last_35_days = Vec::new();
+    for offset in 0..TOKEN_REPORT_LAST_35_DAYS {
+        let date = last_35_days_start + Duration::days(offset);
+        let day = TokenReportDay {
             date: date.format("%Y-%m-%d").to_string(),
             total_usage: TokenUsageBreakdown::default(),
-        });
+        };
+        if date >= last_7_days_start {
+            daily_last_7_days.push(day.clone());
+        }
+        daily_last_35_days.push(day);
     }
 
     TokenReportSummary {
+        source_kind: source_kind.to_string(),
+        source_label: source_label.to_string(),
+        device_count,
+        last_sync_at,
+        warning_count,
         sessions_root: sessions_root.display().to_string(),
         scanned_session_files: 0,
         sessions_with_usage: 0,
@@ -231,6 +312,7 @@ fn empty_token_report(
             total_usage: TokenUsageBreakdown::default(),
         },
         daily_last_7_days,
+        daily_last_35_days,
         recent_sessions: Vec::new(),
     }
 }
@@ -264,7 +346,7 @@ fn collect_session_files(sessions_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn parse_session_file(path: &Path) -> anyhow::Result<ParsedSession> {
+fn parse_session_file(path: &Path, report_timezone: &Tz) -> anyhow::Result<ParsedSession> {
     let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
     let reader = BufReader::new(file);
 
@@ -370,8 +452,10 @@ fn parse_session_file(path: &Path) -> anyhow::Result<ParsedSession> {
                     );
 
                     if has_tokens(&delta_usage) {
-                        pending_delta_events
-                            .push((timestamp.with_timezone(&Local).date_naive(), delta_usage));
+                        pending_delta_events.push((
+                            timestamp.with_timezone(report_timezone).date_naive(),
+                            delta_usage,
+                        ));
                     }
                 }
             }
@@ -395,10 +479,13 @@ fn parse_session_file(path: &Path) -> anyhow::Result<ParsedSession> {
         })
         .collect::<Vec<_>>();
 
+    let cwd_preview = cwd.as_deref().map(format_path_preview);
     let session = total_usage.map(|usage| TokenReportSession {
         session_id: session_key,
         cwd,
+        cwd_preview,
         model_provider,
+        device_name: None,
         started_at,
         updated_at,
         total_usage: usage,
@@ -448,7 +535,7 @@ fn diff_usage(current: &TokenUsageBreakdown, previous: &TokenUsageBreakdown) -> 
     }
 }
 
-fn add_usage(target: &mut TokenUsageBreakdown, value: &TokenUsageBreakdown) {
+pub(crate) fn add_usage(target: &mut TokenUsageBreakdown, value: &TokenUsageBreakdown) {
     target.input_tokens = target.input_tokens.saturating_add(value.input_tokens);
     target.cached_input_tokens = target
         .cached_input_tokens

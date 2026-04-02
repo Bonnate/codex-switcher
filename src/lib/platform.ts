@@ -111,6 +111,21 @@ export async function pickAuthJsonFile(): Promise<FileSource | null> {
   return pickBrowserFile(".json,application/json");
 }
 
+export async function pickSshPrivateKeyFile(): Promise<FileSource | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const selected = await open({
+    multiple: false,
+    title: "SSH 개인 키 파일 선택",
+  });
+
+  if (!selected || Array.isArray(selected)) return null;
+  return selected;
+}
+
 export async function exportFullBackupFile(): Promise<boolean> {
   if (isTauriRuntime()) {
     const { save } = await import("@tauri-apps/plugin-dialog");

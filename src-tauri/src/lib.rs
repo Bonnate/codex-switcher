@@ -18,10 +18,12 @@ use tauri::{image::Image, RunEvent};
 use commands::{
     add_account_from_file, cancel_login, check_codex_processes, complete_login, delete_account,
     export_accounts_full_encrypted_file, export_accounts_slim_text, force_switch_account,
-    get_active_account_info, get_masked_account_ids, get_token_report, get_usage,
-    import_accounts_full_encrypted_file, import_accounts_slim_text, list_accounts,
-    refresh_all_accounts_usage, rename_account, set_masked_account_ids, start_login,
-    switch_account, warmup_account, warmup_all_accounts,
+    get_active_account_info, get_cached_synced_token_report, get_masked_account_ids,
+    get_token_report, get_usage, get_usage_sync_settings, import_accounts_full_encrypted_file,
+    import_accounts_slim_text, list_accounts, load_usage_sync_secure_secrets, pull_usage_sync_repo,
+    refresh_all_accounts_usage, refresh_synced_usage, rename_account,
+    save_usage_sync_secure_secrets, save_usage_sync_settings, set_masked_account_ids, start_login, switch_account,
+    sync_usage_now, push_usage_sync_repo, warmup_account, warmup_all_accounts,
 };
 
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -192,6 +194,15 @@ pub fn run() {
             // Usage
             get_usage,
             get_token_report,
+            get_usage_sync_settings,
+            save_usage_sync_settings,
+            load_usage_sync_secure_secrets,
+            save_usage_sync_secure_secrets,
+            sync_usage_now,
+            push_usage_sync_repo,
+            refresh_synced_usage,
+            pull_usage_sync_repo,
+            get_cached_synced_token_report,
             refresh_all_accounts_usage,
             warmup_account,
             warmup_all_accounts,

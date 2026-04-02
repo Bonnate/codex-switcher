@@ -2,19 +2,30 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { USAGE_AUTO_REFRESH_INTERVAL_MS, useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
 import { getExhaustedRateLimits } from "./components/UsageBar";
-import type { CodexProcessInfo, TokenReportSummary, TokenUsageBreakdown } from "./types";
+import type {
+  CodexProcessInfo,
+  SyncedTokenReportCache,
+  TokenReportSummary,
+  TokenUsageBreakdown,
+  UsageSyncSecureSecrets,
+  UsageSyncSettings,
+} from "./types";
 import {
   exportFullBackupFile,
   hideWindowToTray,
   importFullBackupFile,
   isTauriRuntime,
   invokeBackend,
+  pickSshPrivateKeyFile,
   sendSystemNotification,
 } from "./lib/platform";
 import "./App.css";
 
 const USAGE_ALERT_SETTINGS_KEY = "codex-switcher-usage-alert-settings";
 const PRIVACY_SETTINGS_KEY = "codex-switcher-privacy-settings";
+const DEFAULT_USAGE_SYNC_BRANCH = "main";
+
+type TokenReportSource = "local" | "synced";
 
 type UsageAlertSettings = {
   enabled: boolean;
@@ -94,6 +105,37 @@ function formatProviderLabel(value: string | null | undefined): string {
   return value;
 }
 
+function defaultUsageSyncSettings(): UsageSyncSettings {
+  const timezone =
+    typeof Intl !== "undefined"
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+      : "UTC";
+
+  return {
+    repo_url: "",
+    branch: DEFAULT_USAGE_SYNC_BRANCH,
+    device_id: "",
+    device_name: "",
+    report_timezone: timezone,
+    git_auth_mode: "system",
+    git_username: "",
+    ssh_private_key_path: "",
+  };
+}
+
+function normalizeUsageSyncSettings(settings: UsageSyncSettings): UsageSyncSettings {
+  return {
+    repo_url: settings.repo_url?.trim() ?? "",
+    branch: settings.branch?.trim() || DEFAULT_USAGE_SYNC_BRANCH,
+    device_id: settings.device_id ?? "",
+    device_name: settings.device_name?.trim() ?? "",
+    report_timezone: settings.report_timezone?.trim() || "UTC",
+    git_auth_mode: settings.git_auth_mode ?? "system",
+    git_username: settings.git_username?.trim() ?? "",
+    ssh_private_key_path: settings.ssh_private_key_path?.trim() ?? "",
+  };
+}
+
 function formatTokenBreakdownLine(usage: TokenUsageBreakdown): string {
   const parts = [
     `입력 ${formatTokenCount(usage.input_tokens)}`,
@@ -154,9 +196,22 @@ function App() {
   const [configCopied, setConfigCopied] = useState(false);
   const [isUsageAlertModalOpen, setIsUsageAlertModalOpen] = useState(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
-  const [isTokenReportLoading, setIsTokenReportLoading] = useState(false);
-  const [tokenReport, setTokenReport] = useState<TokenReportSummary | null>(null);
-  const [tokenReportError, setTokenReportError] = useState<string | null>(null);
+  const [isUsageSyncModalOpen, setIsUsageSyncModalOpen] = useState(false);
+  const [tokenReportSource, setTokenReportSource] = useState<TokenReportSource>("local");
+  const [isLocalTokenReportLoading, setIsLocalTokenReportLoading] = useState(false);
+  const [localTokenReport, setLocalTokenReport] = useState<TokenReportSummary | null>(null);
+  const [localTokenReportError, setLocalTokenReportError] = useState<string | null>(null);
+  const [isSyncedTokenReportLoading, setIsSyncedTokenReportLoading] = useState(false);
+  const [syncedTokenReportCache, setSyncedTokenReportCache] = useState<SyncedTokenReportCache | null>(null);
+  const [syncedTokenReportError, setSyncedTokenReportError] = useState<string | null>(null);
+  const [usageSyncSettings, setUsageSyncSettings] = useState<UsageSyncSettings>(
+    defaultUsageSyncSettings()
+  );
+  const [draftUsageSyncSettings, setDraftUsageSyncSettings] = useState<UsageSyncSettings>(
+    defaultUsageSyncSettings()
+  );
+  const [usageSyncPassphrase, setUsageSyncPassphrase] = useState("");
+  const [usageSyncGitAccessToken, setUsageSyncGitAccessToken] = useState("");
   const [isRecentSessionsExpanded, setIsRecentSessionsExpanded] = useState(false);
   const [selectedTrendIndex, setSelectedTrendIndex] = useState(6);
   const [usageAlertSettings, setUsageAlertSettings] = useState<UsageAlertSettings>(
@@ -257,6 +312,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    void (async () => {
+      try {
+        const settings = await invokeBackend<UsageSyncSettings>("get_usage_sync_settings");
+        const normalized = normalizeUsageSyncSettings(settings);
+        setUsageSyncSettings(normalized);
+        setDraftUsageSyncSettings(normalized);
+
+        const secrets = await invokeBackend<UsageSyncSecureSecrets>(
+          "load_usage_sync_secure_secrets"
+        );
+        setUsageSyncGitAccessToken(secrets.git_access_token ?? "");
+        setUsageSyncPassphrase(secrets.sync_passphrase ?? "");
+      } catch (err) {
+        console.error("Failed to load usage sync settings:", err);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
 
     try {
@@ -338,7 +414,13 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      await Promise.all([refreshUsage(), loadTokenReport()]);
+      await Promise.all([
+        refreshUsage(),
+        loadLocalTokenReport(false),
+        tokenReportSource === "synced" && usageSyncPassphrase.trim()
+          ? refreshSyncedTokenReport("pull", false)
+          : Promise.resolve(null),
+      ]);
       setRefreshSuccess(true);
       setTimeout(() => setRefreshSuccess(false), 2000);
     } finally {
@@ -351,19 +433,93 @@ function App() {
     setTimeout(() => setWarmupToast(null), 2500);
   };
 
-  const loadTokenReport = async () => {
+  const loadLocalTokenReport = async (showErrorToast = true) => {
     try {
-      setIsTokenReportLoading(true);
-      setTokenReportError(null);
+      setIsLocalTokenReportLoading(true);
+      setLocalTokenReportError(null);
       const report = await invokeBackend<TokenReportSummary>("get_token_report");
-      setTokenReport(report);
+      setLocalTokenReport(report);
+      return report;
     } catch (err) {
-      console.error("Failed to load token report:", err);
+      console.error("Failed to load local token report:", err);
       const message = err instanceof Error ? err.message : String(err);
-      setTokenReportError(message);
-      showWarmupToast("토큰 리포트를 불러오지 못했습니다", true);
+      setLocalTokenReportError(message);
+      if (showErrorToast) {
+        showWarmupToast("이 기기 토큰 리포트를 불러오지 못했습니다", true);
+      }
+      return null;
     } finally {
-      setIsTokenReportLoading(false);
+      setIsLocalTokenReportLoading(false);
+    }
+  };
+
+  const loadCachedSyncedTokenReport = async (showErrorToast = false) => {
+    if (!isTauriRuntime()) return null;
+
+    try {
+      setIsSyncedTokenReportLoading(true);
+      setSyncedTokenReportError(null);
+      const cache = await invokeBackend<SyncedTokenReportCache>(
+        "get_cached_synced_token_report"
+      );
+      setSyncedTokenReportCache(cache);
+      return cache;
+    } catch (err) {
+      console.error("Failed to load synced token report cache:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      setSyncedTokenReportError(message);
+      if (showErrorToast) {
+        showWarmupToast("동기화된 사용량 캐시를 읽지 못했습니다", true);
+      }
+      return null;
+    } finally {
+      setIsSyncedTokenReportLoading(false);
+    }
+  };
+
+  const refreshSyncedTokenReport = async (
+    mode: "pull" | "push",
+    showSuccessToast = true
+  ) => {
+    if (!isTauriRuntime()) return null;
+
+    if (!usageSyncPassphrase.trim()) {
+      const message = "동기화 암호를 먼저 입력하세요.";
+      setSyncedTokenReportError(message);
+      showWarmupToast(message, true);
+      return null;
+    }
+
+    try {
+      setIsSyncedTokenReportLoading(true);
+      setSyncedTokenReportError(null);
+      const command = mode === "push" ? "push_usage_sync_repo" : "pull_usage_sync_repo";
+      const cache = await invokeBackend<SyncedTokenReportCache>(command, {
+        passphrase: usageSyncPassphrase,
+        gitAccessToken:
+          draftUsageSyncSettings.git_auth_mode === "github_pat"
+            ? usageSyncGitAccessToken
+            : undefined,
+      });
+      setSyncedTokenReportCache(cache);
+      if (cache.report && tokenReportSource === "synced") {
+        setSelectedTrendIndex(Math.max(0, cache.report.daily_last_7_days.length - 1));
+      }
+      if (showSuccessToast) {
+        showWarmupToast(mode === "push" ? "사용량 스냅샷을 Push했습니다." : "원격 사용량을 Pull했습니다.");
+      }
+      return cache;
+    } catch (err) {
+      console.error("Failed to refresh synced token report:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      setSyncedTokenReportError(message);
+      showWarmupToast(
+        mode === "push" ? "사용량 Push에 실패했습니다" : "원격 사용량 Pull에 실패했습니다",
+        true
+      );
+      return null;
+    } finally {
+      setIsSyncedTokenReportLoading(false);
     }
   };
 
@@ -412,6 +568,74 @@ function App() {
     }
     setIsPrivacyModalOpen(false);
     showWarmupToast("표시 설정을 저장했습니다.");
+  };
+
+  const persistUsageSyncSettings = async () => {
+    if (!isTauriRuntime()) return null;
+
+    const normalized = normalizeUsageSyncSettings(draftUsageSyncSettings);
+    try {
+      const saved = await invokeBackend<UsageSyncSettings>("save_usage_sync_settings", {
+        settings: normalized,
+      });
+      const nextSettings = normalizeUsageSyncSettings(saved);
+      setUsageSyncSettings(nextSettings);
+      setDraftUsageSyncSettings(nextSettings);
+
+      await invokeBackend("save_usage_sync_secure_secrets", {
+        gitAccessToken: usageSyncGitAccessToken.trim() || null,
+        syncPassphrase: usageSyncPassphrase.trim() || null,
+      });
+      return nextSettings;
+    } catch (err) {
+      console.error("Failed to save usage sync settings:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      setSyncedTokenReportError(message);
+      showWarmupToast("사용량 동기화 설정 또는 보안 저장에 실패했습니다", true);
+      return null;
+    }
+  };
+
+  const handlePickUsageSyncSshKey = async () => {
+    const selected = await pickSshPrivateKeyFile();
+    if (!selected || typeof selected !== "string") return;
+
+    setDraftUsageSyncSettings((prev) => ({
+      ...prev,
+      git_auth_mode: "ssh_key_file",
+      ssh_private_key_path: selected,
+    }));
+  };
+
+  const handleSaveUsageSyncSettings = async () => {
+    const saved = await persistUsageSyncSettings();
+    if (!saved) return;
+
+    await loadCachedSyncedTokenReport(false);
+    setIsUsageSyncModalOpen(false);
+    showWarmupToast("사용량 동기화 설정을 저장했습니다.");
+  };
+
+  const handleCheckUsageSyncConnection = async () => {
+    const saved = await persistUsageSyncSettings();
+    if (!saved) return;
+
+    const cache = await refreshSyncedTokenReport("pull", false);
+    if (cache) {
+      showWarmupToast("원격 저장소 연결을 확인했습니다.");
+    }
+  };
+
+  const handleSyncUsageNow = async () => {
+    const saved = await persistUsageSyncSettings();
+    if (!saved) return;
+    await refreshSyncedTokenReport("push");
+  };
+
+  const handleRefreshSyncedUsage = async () => {
+    const saved = await persistUsageSyncSettings();
+    if (!saved) return;
+    await refreshSyncedTokenReport("pull");
   };
 
   const formatWarmupError = (err: unknown) => {
@@ -561,6 +785,17 @@ function App() {
   const otherAccounts = accounts.filter((a) => !a.is_active);
   const hasRunningProcesses = processInfo && processInfo.count > 0;
   const hasAccounts = accounts.length > 0;
+  const syncedCacheAvailable = Boolean(syncedTokenReportCache?.status.cache_available);
+  const tokenReport =
+    tokenReportSource === "synced"
+      ? syncedTokenReportCache?.report ?? null
+      : localTokenReport;
+  const tokenReportError =
+    tokenReportSource === "synced" ? syncedTokenReportError : localTokenReportError;
+  const isTokenReportLoading =
+    tokenReportSource === "synced"
+      ? isSyncedTokenReportLoading
+      : isLocalTokenReportLoading;
   const maxDailyTokenUsage = useMemo(() => {
     if (!tokenReport || tokenReport.daily_last_7_days.length === 0) return 0;
     return Math.max(...tokenReport.daily_last_7_days.map((day) => day.total_usage.total_tokens));
@@ -753,13 +988,22 @@ function App() {
   }, [nextAutoRefreshAt, refreshCountdownNow]);
 
   useEffect(() => {
-    void loadTokenReport();
+    void loadLocalTokenReport(false);
+    if (isTauriRuntime()) {
+      void loadCachedSyncedTokenReport(false);
+    }
   }, []);
 
   useEffect(() => {
     if (!tokenReport || tokenReport.daily_last_7_days.length === 0) return;
     setSelectedTrendIndex(tokenReport.daily_last_7_days.length - 1);
   }, [tokenReport?.generated_at]);
+
+  useEffect(() => {
+    if (tokenReportSource === "synced" && !syncedCacheAvailable) {
+      setTokenReportSource("local");
+    }
+  }, [syncedCacheAvailable, tokenReportSource]);
 
   return (
     <div className="app-shell">
@@ -908,6 +1152,19 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                     >
                       사용량 알림 설정
                     </button>
+                    {isTauriRuntime() && (
+                      <button
+                        onClick={() => {
+                          setDraftUsageSyncSettings(usageSyncSettings);
+                          setIsOptionsMenuOpen(false);
+                          setIsUsageSyncModalOpen(true);
+                        }}
+                        className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
+                        title="개인 Git 저장소를 사용해 여러 PC의 토큰 사용량을 암호화된 스냅샷으로 동기화합니다."
+                      >
+                        사용량 동기화
+                      </button>
+                    )}
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
@@ -1039,15 +1296,52 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
 
             <section>
               <div className="mb-4 flex items-center justify-between gap-3">
-                <h2 className="section-label">토큰 관련</h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="section-label">토큰 관련</h2>
+                  <div className="inline-flex rounded-full border border-[rgba(181,193,231,0.54)] bg-white/70 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setTokenReportSource("local")}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                        tokenReportSource === "local"
+                          ? "bg-[rgba(103,119,255,0.12)] text-[var(--primary-strong)]"
+                          : "text-[var(--text-body)]"
+                      }`}
+                    >
+                      이 기기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!syncedCacheAvailable) return;
+                        setTokenReportSource("synced");
+                      }}
+                      disabled={!syncedCacheAvailable}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                        tokenReportSource === "synced"
+                          ? "bg-[rgba(103,119,255,0.12)] text-[var(--primary-strong)]"
+                          : "text-[var(--text-body)]"
+                      }`}
+                    >
+                      동기화 합산
+                    </button>
+                  </div>
+                </div>
                 <button
                   onClick={() => {
-                    void loadTokenReport();
+                    if (tokenReportSource === "synced") {
+                      void refreshSyncedTokenReport("pull");
+                    } else {
+                      void loadLocalTokenReport();
+                    }
                   }}
-                  disabled={isTokenReportLoading}
+                  disabled={
+                    isTokenReportLoading ||
+                    (tokenReportSource === "synced" && (!syncedCacheAvailable || !usageSyncPassphrase.trim()))
+                  }
                   className="btn-base btn-secondary px-4 py-2 text-sm font-medium disabled:opacity-50"
                 >
-                  {isTokenReportLoading ? "읽는 중..." : "다시 읽기"}
+                  {isTokenReportLoading ? "읽는 중..." : tokenReportSource === "synced" ? "Pull" : "다시 읽기"}
                 </button>
               </div>
 
@@ -1056,7 +1350,9 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   <div className="option-card rounded-2xl p-10 text-center">
                     <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-[var(--primary)] border-t-transparent" />
                     <p className="text-sm text-[var(--text-body)]">
-                      로컬 세션 로그를 읽어 토큰 사용량을 계산하고 있습니다.
+                      {tokenReportSource === "synced"
+                        ? "동기화된 사용량 스냅샷을 읽고 있습니다."
+                        : "이 기기 세션 로그를 읽어 토큰 사용량을 계산하고 있습니다."}
                     </p>
                   </div>
                 )}
@@ -1069,6 +1365,32 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
 
                 {tokenReport && (
                   <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
+                        {tokenReport.source_label}
+                      </span>
+                      {tokenReportSource === "synced" && (
+                        <>
+                          <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
+                            기기 {formatTokenCount(tokenReport.device_count)}대
+                          </span>
+                          {tokenReport.last_sync_at && (
+                            <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
+                              마지막 동기화 {formatTokenTimestamp(tokenReport.last_sync_at)}
+                            </span>
+                          )}
+                          {syncedTokenReportCache && syncedTokenReportCache.warnings.length > 0 && (
+                            <span
+                              className="rounded-full border border-[rgba(255,201,132,0.34)] bg-[rgba(255,243,218,0.82)] px-3 py-1 text-xs font-medium text-[#8a5c23]"
+                              title={syncedTokenReportCache.warnings.join("\n")}
+                            >
+                              경고 {formatTokenCount(syncedTokenReportCache.warnings.length)}개
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </div>
+
                     <div className="grid gap-4 md:grid-cols-3">
                       {[
                         {
@@ -1239,12 +1561,14 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                           <h3 className="text-base font-semibold text-[var(--text-strong)]">
-                            최근 세션
+                            {tokenReportSource === "synced" ? "최근 동기화 기록" : "최근 세션"}
                           </h3>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/70 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
-                            사용 세션 {formatTokenCount(tokenReport.sessions_with_usage)}개
+                            {tokenReportSource === "synced"
+                              ? `최근 목록 ${formatTokenCount(tokenReport.recent_sessions.length)}개`
+                              : `사용 세션 ${formatTokenCount(tokenReport.sessions_with_usage)}개`}
                           </span>
                           <button
                             onClick={() => setIsRecentSessionsExpanded((prev) => !prev)}
@@ -1258,7 +1582,9 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
 
                       {tokenReport.recent_sessions.length === 0 ? (
                         <div className="mt-4 rounded-2xl border border-[rgba(186,195,233,0.38)] bg-white/76 p-4 text-sm text-[var(--text-body)]">
-                          아직 토큰이 기록된 로컬 세션이 없습니다.
+                          {tokenReportSource === "synced"
+                            ? "아직 동기화된 최근 기록이 없습니다."
+                            : "아직 토큰이 기록된 로컬 세션이 없습니다."}
                         </div>
                       ) : !isRecentSessionsExpanded ? (
                         <div className="mt-4 rounded-2xl border border-[rgba(186,195,233,0.38)] bg-white/76 p-4">
@@ -1280,6 +1606,11 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                                 <div className="min-w-0 space-y-2">
                                   <div className="flex flex-wrap gap-2">
+                                    {session.device_name && (
+                                      <span className="rounded-full border border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.18)] px-3 py-1 text-xs font-medium text-[#2f8d76]">
+                                        {session.device_name}
+                                      </span>
+                                    )}
                                     <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/72 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
                                       {formatProviderLabel(session.model_provider)}
                                     </span>
@@ -1300,10 +1631,10 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                                   </div>
 
                                   <p className="truncate text-sm font-medium text-[var(--text-strong)]">
-                                    {formatPathPreview(session.cwd)}
+                                    {session.cwd_preview ?? formatPathPreview(session.cwd)}
                                   </p>
                                   <p className="break-all text-xs text-[var(--text-soft)]">
-                                    {session.cwd ?? "경로 정보 없음"}
+                                    {session.cwd_preview ?? session.cwd ?? "경로 정보 없음"}
                                   </p>
                                   <p
                                     className="text-xs text-[var(--text-body)]"
@@ -1548,6 +1879,291 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isUsageSyncModalOpen && (
+        <div className="modal-backdrop fixed inset-0 z-50 flex items-center justify-center">
+          <div className="modal-surface mx-4 w-full max-w-2xl rounded-[28px]">
+            <div className="soft-divider flex items-center justify-between border-b p-5">
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--text-strong)]">사용량 동기화</h2>
+                <p className="mt-1 text-sm text-[var(--text-body)]">
+                  개인 Git 저장소에 기기별 암호화 스냅샷을 올리고 여러 PC 사용량을 합칩니다.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsUsageSyncModalOpen(false)}
+                className="text-[var(--text-soft)] transition-colors hover:text-[var(--primary-strong)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="block text-sm font-medium text-[var(--text-strong)]">저장소 주소</span>
+                  <input
+                    type="text"
+                    value={draftUsageSyncSettings.repo_url}
+                    onChange={(e) =>
+                      setDraftUsageSyncSettings((prev) => ({
+                        ...prev,
+                        repo_url: e.target.value,
+                      }))
+                    }
+                    placeholder="git@github.com:you/private-usage-ledger.git"
+                    className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="block text-sm font-medium text-[var(--text-strong)]">브랜치</span>
+                  <input
+                    type="text"
+                    value={draftUsageSyncSettings.branch}
+                    onChange={(e) =>
+                      setDraftUsageSyncSettings((prev) => ({
+                        ...prev,
+                        branch: e.target.value,
+                      }))
+                    }
+                    placeholder="main"
+                    className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="block text-sm font-medium text-[var(--text-strong)]">기기 이름</span>
+                  <input
+                    type="text"
+                    value={draftUsageSyncSettings.device_name}
+                    onChange={(e) =>
+                      setDraftUsageSyncSettings((prev) => ({
+                        ...prev,
+                        device_name: e.target.value,
+                      }))
+                    }
+                    placeholder="Main PC"
+                    className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="space-y-2">
+                  <span className="block text-sm font-medium text-[var(--text-strong)]">기준 시간대</span>
+                  <input
+                    type="text"
+                    value={draftUsageSyncSettings.report_timezone}
+                    onChange={(e) =>
+                      setDraftUsageSyncSettings((prev) => ({
+                        ...prev,
+                        report_timezone: e.target.value,
+                      }))
+                    }
+                    placeholder="Asia/Seoul"
+                    className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                  />
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="block text-sm font-medium text-[var(--text-strong)]">
+                    Git 인증 방식
+                  </span>
+                  <select
+                    value={draftUsageSyncSettings.git_auth_mode}
+                    onChange={(e) =>
+                      setDraftUsageSyncSettings((prev) => ({
+                        ...prev,
+                        git_auth_mode: e.target.value as UsageSyncSettings["git_auth_mode"],
+                      }))
+                    }
+                    className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                  >
+                    <option value="system">시스템 기본</option>
+                    <option value="ssh_key_file">SSH 키 파일</option>
+                    <option value="github_pat">GitHub PAT</option>
+                  </select>
+                </label>
+
+                {draftUsageSyncSettings.git_auth_mode === "ssh_key_file" && (
+                  <div className="space-y-2 md:col-span-2">
+                    <span className="block text-sm font-medium text-[var(--text-strong)]">
+                      SSH 키 파일
+                    </span>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <input
+                        type="text"
+                        value={draftUsageSyncSettings.ssh_private_key_path}
+                        onChange={(e) =>
+                          setDraftUsageSyncSettings((prev) => ({
+                            ...prev,
+                            ssh_private_key_path: e.target.value,
+                          }))
+                        }
+                        placeholder="예: C:\\Users\\name\\.ssh\\id_ed25519"
+                        className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void handlePickUsageSyncSshKey();
+                          }}
+                          className="btn-base btn-secondary px-4 py-2 text-sm font-medium whitespace-nowrap"
+                        >
+                          파일 선택
+                        </button>
+                        {draftUsageSyncSettings.ssh_private_key_path && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftUsageSyncSettings((prev) => ({
+                                ...prev,
+                                ssh_private_key_path: "",
+                              }))
+                            }
+                            className="btn-base btn-secondary px-4 py-2 text-sm font-medium whitespace-nowrap"
+                          >
+                            지우기
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-xs text-[var(--text-body)]">
+                      SSH 저장소일 때 이 개인키 파일로 push/pull 합니다.
+                    </p>
+                  </div>
+                )}
+
+                {draftUsageSyncSettings.git_auth_mode === "github_pat" && (
+                  <>
+                    <label className="space-y-2">
+                      <span className="block text-sm font-medium text-[var(--text-strong)]">
+                        GitHub 사용자 이름
+                      </span>
+                      <input
+                        type="text"
+                        value={draftUsageSyncSettings.git_username}
+                        onChange={(e) =>
+                          setDraftUsageSyncSettings((prev) => ({
+                            ...prev,
+                            git_username: e.target.value,
+                          }))
+                        }
+                        placeholder="GitHub username"
+                        className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                      />
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="block text-sm font-medium text-[var(--text-strong)]">
+                        GitHub 액세스 토큰
+                      </span>
+                      <div className="space-y-2">
+                        <input
+                          type="password"
+                          value={usageSyncGitAccessToken}
+                          onChange={(e) => setUsageSyncGitAccessToken(e.target.value)}
+                          placeholder="ghp_... 또는 fine-grained token"
+                          className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                        />
+                        <p className="text-xs text-[var(--text-body)]">
+                          토큰은 저장하지 않고 현재 앱 실행 중에만 사용합니다.
+                        </p>
+                      </div>
+                    </label>
+                  </>
+                )}
+              </div>
+
+              <div className="option-card rounded-2xl p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
+                  <label className="flex-1 space-y-2">
+                    <span className="block text-sm font-medium text-[var(--text-strong)]">동기화 암호</span>
+                    <input
+                      type="password"
+                      value={usageSyncPassphrase}
+                      onChange={(e) => setUsageSyncPassphrase(e.target.value)}
+                      placeholder="모든 PC에서 동일하게 입력할 암호"
+                      className="field-shell w-full rounded-xl px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => {
+                        void handleCheckUsageSyncConnection();
+                      }}
+                      disabled={isSyncedTokenReportLoading}
+                      className="btn-base btn-secondary px-4 py-2 text-sm font-medium disabled:opacity-50"
+                    >
+                      연결 확인
+                    </button>
+                    <button
+                      onClick={() => {
+                        void handleSyncUsageNow();
+                      }}
+                      disabled={isSyncedTokenReportLoading}
+                      className="btn-base btn-primary px-4 py-2 text-sm font-medium disabled:opacity-50"
+                    >
+                      Push
+                    </button>
+                    <button
+                      onClick={() => {
+                        void handleRefreshSyncedUsage();
+                      }}
+                      disabled={isSyncedTokenReportLoading}
+                      className="btn-base btn-secondary px-4 py-2 text-sm font-medium disabled:opacity-50"
+                    >
+                      Pull
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 text-sm text-[var(--text-body)]">
+                <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1.5">
+                  기기 ID {usageSyncSettings.device_id || "미생성"}
+                </span>
+                <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1.5">
+                  비밀값은 이 PC의 보안 저장소에 저장
+                </span>
+                {syncedTokenReportCache?.status.cache_available && (
+                  <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1.5">
+                    캐시 기기 {formatTokenCount(syncedTokenReportCache.status.device_count)}대
+                  </span>
+                )}
+                {syncedTokenReportCache?.status.last_sync_at && (
+                  <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1.5">
+                    마지막 동기화 {formatTokenTimestamp(syncedTokenReportCache.status.last_sync_at)}
+                  </span>
+                )}
+              </div>
+
+              {syncedTokenReportError && (
+                <div className="rounded-xl border border-[rgba(255,159,184,0.42)] bg-[rgba(255,236,242,0.9)] p-3 text-sm text-[#c25778]">
+                  {syncedTokenReportError}
+                </div>
+              )}
+            </div>
+
+            <div className="soft-divider flex gap-3 border-t p-5">
+              <button
+                onClick={() => setIsUsageSyncModalOpen(false)}
+                className="btn-base btn-secondary px-4 py-2.5 text-sm font-medium"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => {
+                  void handleSaveUsageSyncSettings();
+                }}
+                className="btn-base btn-primary px-4 py-2.5 text-sm font-medium"
+              >
+                저장
+              </button>
             </div>
           </div>
         </div>
