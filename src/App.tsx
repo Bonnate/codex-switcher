@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { USAGE_AUTO_REFRESH_INTERVAL_MS, useAccounts } from "./hooks/useAccounts";
 import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
 import { getExhaustedRateLimits } from "./components/UsageBar";
-import type { CodexProcessInfo } from "./types";
+import type { CodexProcessInfo, TokenReportSummary, TokenUsageBreakdown } from "./types";
 import {
   exportFullBackupFile,
   hideWindowToTray,
@@ -43,6 +43,83 @@ function isPrivacyMode(value: unknown): value is PrivacyMode {
   return value === "full" || value === "blur" || value === "prefix3";
 }
 
+const tokenCountFormatter = new Intl.NumberFormat("ko-KR");
+const compactTokenCountFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+function formatTokenCount(value: number | null | undefined): string {
+  return tokenCountFormatter.format(value ?? 0);
+}
+
+function formatCompactTokenCount(value: number | null | undefined): string {
+  return compactTokenCountFormatter.format(value ?? 0);
+}
+
+function formatTokenTimestamp(value: string | null | undefined): string {
+  if (!value) return "기록 없음";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "기록 없음";
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatTokenDayLabel(value: string): string {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "numeric",
+    day: "numeric",
+  }).format(date);
+}
+
+function formatPathPreview(value: string | null | undefined): string {
+  if (!value) return "경로 정보 없음";
+
+  const parts = value.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 3) return value;
+  return `.../${parts.slice(-3).join("/")}`;
+}
+
+function formatProviderLabel(value: string | null | undefined): string {
+  if (!value) return "provider";
+  if (value === "openai") return "OpenAI";
+  return value;
+}
+
+function formatTokenBreakdownLine(usage: TokenUsageBreakdown): string {
+  const parts = [
+    `입력 ${formatTokenCount(usage.input_tokens)}`,
+    usage.cached_input_tokens > 0 ? `캐시 ${formatTokenCount(usage.cached_input_tokens)}` : null,
+    usage.output_tokens > 0 ? `출력 ${formatTokenCount(usage.output_tokens)}` : null,
+    usage.reasoning_output_tokens > 0
+      ? `추론 ${formatTokenCount(usage.reasoning_output_tokens)}`
+      : null,
+  ].filter(Boolean);
+
+  return parts.join(" · ");
+}
+
+function formatCompactTokenBreakdownLine(usage: TokenUsageBreakdown): string {
+  const parts = [
+    `입 ${formatCompactTokenCount(usage.input_tokens)}`,
+    usage.cached_input_tokens > 0 ? `캐 ${formatCompactTokenCount(usage.cached_input_tokens)}` : null,
+    usage.output_tokens > 0 ? `출 ${formatCompactTokenCount(usage.output_tokens)}` : null,
+    usage.reasoning_output_tokens > 0
+      ? `추 ${formatCompactTokenCount(usage.reasoning_output_tokens)}`
+      : null,
+  ].filter(Boolean);
+
+  return parts.join(" · ");
+}
+
 function App() {
   const {
     accounts,
@@ -77,6 +154,11 @@ function App() {
   const [configCopied, setConfigCopied] = useState(false);
   const [isUsageAlertModalOpen, setIsUsageAlertModalOpen] = useState(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
+  const [isTokenReportLoading, setIsTokenReportLoading] = useState(false);
+  const [tokenReport, setTokenReport] = useState<TokenReportSummary | null>(null);
+  const [tokenReportError, setTokenReportError] = useState<string | null>(null);
+  const [isRecentSessionsExpanded, setIsRecentSessionsExpanded] = useState(false);
+  const [selectedTrendIndex, setSelectedTrendIndex] = useState(6);
   const [usageAlertSettings, setUsageAlertSettings] = useState<UsageAlertSettings>(
     DEFAULT_USAGE_ALERT_SETTINGS
   );
@@ -256,7 +338,7 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      await refreshUsage();
+      await Promise.all([refreshUsage(), loadTokenReport()]);
       setRefreshSuccess(true);
       setTimeout(() => setRefreshSuccess(false), 2000);
     } finally {
@@ -267,6 +349,22 @@ function App() {
   const showWarmupToast = (message: string, isError = false) => {
     setWarmupToast({ message, isError });
     setTimeout(() => setWarmupToast(null), 2500);
+  };
+
+  const loadTokenReport = async () => {
+    try {
+      setIsTokenReportLoading(true);
+      setTokenReportError(null);
+      const report = await invokeBackend<TokenReportSummary>("get_token_report");
+      setTokenReport(report);
+    } catch (err) {
+      console.error("Failed to load token report:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      setTokenReportError(message);
+      showWarmupToast("토큰 리포트를 불러오지 못했습니다", true);
+    } finally {
+      setIsTokenReportLoading(false);
+    }
   };
 
   const saveUsageAlertSettings = () => {
@@ -463,7 +561,22 @@ function App() {
   const otherAccounts = accounts.filter((a) => !a.is_active);
   const hasRunningProcesses = processInfo && processInfo.count > 0;
   const hasAccounts = accounts.length > 0;
-
+  const maxDailyTokenUsage = useMemo(() => {
+    if (!tokenReport || tokenReport.daily_last_7_days.length === 0) return 0;
+    return Math.max(...tokenReport.daily_last_7_days.map((day) => day.total_usage.total_tokens));
+  }, [tokenReport]);
+  const latestRecentSessionUpdatedAt = useMemo(
+    () => tokenReport?.recent_sessions[0]?.updated_at ?? tokenReport?.generated_at ?? null,
+    [tokenReport]
+  );
+  const selectedTrendDay = useMemo(() => {
+    if (!tokenReport || tokenReport.daily_last_7_days.length === 0) return null;
+    const safeIndex = Math.min(
+      Math.max(selectedTrendIndex, 0),
+      tokenReport.daily_last_7_days.length - 1
+    );
+    return tokenReport.daily_last_7_days[safeIndex];
+  }, [selectedTrendIndex, tokenReport]);
   useEffect(() => {
     if (!usageAlertSettings.enabled || !activeAccount?.usage || activeAccount.usage.error) {
       return;
@@ -639,6 +752,15 @@ function App() {
     return Math.max(0, Math.ceil((nextAutoRefreshAt - refreshCountdownNow) / 1000));
   }, [nextAutoRefreshAt, refreshCountdownNow]);
 
+  useEffect(() => {
+    void loadTokenReport();
+  }, []);
+
+  useEffect(() => {
+    if (!tokenReport || tokenReport.daily_last_7_days.length === 0) return;
+    setSelectedTrendIndex(tokenReport.daily_last_7_days.length - 1);
+  }, [tokenReport?.generated_at]);
+
   return (
     <div className="app-shell">
       {/* Header */}
@@ -783,9 +905,9 @@ function App() {
                         className="menu-item w-full rounded-xl px-3 py-2 text-left text-sm"
                         title="현재 사용 중인 계정의 사용량이 일정 수준 이하로 내려갔을 때
 Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
-                      >
-                        사용량 알림 설정
-                      </button>
+                    >
+                      사용량 알림 설정
+                    </button>
                     <button
                       onClick={() => {
                         setIsOptionsMenuOpen(false);
@@ -843,6 +965,8 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
         </div>
       </header>
 
+      <UpdateChecker />
+
       {/* Main Content */}
       <main className="app-content mx-auto max-w-6xl px-6 py-8">
         {loading && accounts.length === 0 ? (
@@ -890,7 +1014,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
             {activeAccount && (
               <section>
                 <h2 className="section-label mb-4">
-                  현재 사용 중인 계정
+                  현재 사용량
                 </h2>
                 <AccountCard
                   account={activeAccount}
@@ -913,12 +1037,303 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
               </section>
             )}
 
+            <section>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h2 className="section-label">토큰 관련</h2>
+                <button
+                  onClick={() => {
+                    void loadTokenReport();
+                  }}
+                  disabled={isTokenReportLoading}
+                  className="btn-base btn-secondary px-4 py-2 text-sm font-medium disabled:opacity-50"
+                >
+                  {isTokenReportLoading ? "읽는 중..." : "다시 읽기"}
+                </button>
+              </div>
+
+              <div className="space-y-5">
+                {isTokenReportLoading && !tokenReport && (
+                  <div className="option-card rounded-2xl p-10 text-center">
+                    <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-[var(--primary)] border-t-transparent" />
+                    <p className="text-sm text-[var(--text-body)]">
+                      로컬 세션 로그를 읽어 토큰 사용량을 계산하고 있습니다.
+                    </p>
+                  </div>
+                )}
+
+                {tokenReportError && (
+                  <div className="rounded-2xl border border-[rgba(255,159,184,0.42)] bg-[rgba(255,236,242,0.9)] p-4 text-sm text-[#c25778]">
+                    {tokenReportError}
+                  </div>
+                )}
+
+                {tokenReport && (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-3">
+                      {[
+                        {
+                          label: "오늘",
+                          summary: tokenReport.today,
+                          className:
+                            "bg-[linear-gradient(180deg,rgba(235,244,255,0.94),rgba(250,252,255,0.94))]",
+                        },
+                        {
+                          label: "최근 7일",
+                          summary: tokenReport.last_7_days,
+                          className:
+                            "bg-[linear-gradient(180deg,rgba(242,239,255,0.94),rgba(251,251,255,0.94))]",
+                        },
+                        {
+                          label: "최근 30일",
+                          summary: tokenReport.last_30_days,
+                          className:
+                            "bg-[linear-gradient(180deg,rgba(236,248,245,0.94),rgba(250,252,255,0.94))]",
+                        },
+                    ].map((entry) => (
+                      <div
+                        key={entry.label}
+                        className={`option-card rounded-2xl p-4 ${entry.className}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 space-y-1">
+                            <p className="text-sm font-medium text-[var(--text-strong)]">
+                              {entry.label}
+                            </p>
+                            <p
+                              className="text-[clamp(2.25rem,4vw,3.25rem)] font-semibold leading-none tracking-[-0.05em] text-[var(--text-strong)]"
+                              title={formatTokenCount(entry.summary.total_usage.total_tokens)}
+                            >
+                              {formatCompactTokenCount(entry.summary.total_usage.total_tokens)}
+                            </p>
+                            <p className="text-sm text-[var(--text-body)]">총 토큰</p>
+                          </div>
+                          <span
+                            className="inline-flex min-w-[84px] shrink-0 items-center justify-center whitespace-nowrap rounded-full border border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.18)] px-3 py-1 text-[11px] font-medium tabular-nums text-[#2f8d76]"
+                            title={`세션 ${formatTokenCount(entry.summary.session_count)}개`}
+                          >
+                            {formatCompactTokenCount(entry.summary.session_count)} 세션
+                          </span>
+                        </div>
+                        <p
+                          className="mt-4 text-sm text-[var(--text-body)]"
+                          title={formatTokenBreakdownLine(entry.summary.total_usage)}
+                        >
+                          {formatCompactTokenBreakdownLine(entry.summary.total_usage)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                    <div className="option-card rounded-2xl p-5">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                        <div>
+                          <h3 className="text-base font-semibold text-[var(--text-strong)]">
+                            최근 7일 추이
+                          </h3>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {selectedTrendDay && (
+                            <>
+                              <span className="rounded-full border border-[rgba(103,119,255,0.18)] bg-[rgba(103,119,255,0.08)] px-3 py-1 text-xs font-medium text-[var(--primary-strong)]">
+                                선택 {formatTokenDayLabel(selectedTrendDay.date)}
+                              </span>
+                              <span
+                                className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/70 px-3 py-1 text-xs font-medium text-[var(--text-body)]"
+                                title={formatTokenCount(selectedTrendDay.total_usage.total_tokens)}
+                              >
+                                {formatCompactTokenCount(selectedTrendDay.total_usage.total_tokens)}
+                              </span>
+                            </>
+                          )}
+                          <span
+                            className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/70 px-3 py-1 text-xs font-medium text-[var(--text-body)]"
+                            title={formatTokenCount(maxDailyTokenUsage)}
+                          >
+                            최대 {formatCompactTokenCount(maxDailyTokenUsage)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 rounded-[24px] border border-[rgba(186,195,233,0.42)] bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(244,247,255,0.72))] p-4">
+                        <div className="grid gap-4 lg:grid-cols-[56px_minmax(0,1fr)]">
+                          <div className="hidden h-56 flex-col justify-between pt-2 text-right text-[11px] font-medium text-[var(--text-soft)] lg:flex">
+                            <span title={formatTokenCount(maxDailyTokenUsage)}>
+                              {formatCompactTokenCount(maxDailyTokenUsage)}
+                            </span>
+                            <span
+                              title={formatTokenCount(Math.round(maxDailyTokenUsage / 2))}
+                            >
+                              {formatCompactTokenCount(Math.round(maxDailyTokenUsage / 2))}
+                            </span>
+                            <span>0</span>
+                          </div>
+
+                          <div className="overflow-x-auto overflow-y-hidden md:overflow-hidden">
+                            <div className="relative h-56 min-w-[560px] md:min-w-0 rounded-[20px] border border-[rgba(186,195,233,0.3)] bg-white/70 px-3 pb-3 pt-4">
+                              <div className="pointer-events-none absolute inset-x-3 top-4 bottom-12">
+                                <div className="absolute inset-x-0 top-0 border-t border-dashed border-[rgba(205,213,241,0.7)]" />
+                                <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-[rgba(205,213,241,0.55)]" />
+                                <div className="absolute inset-x-0 bottom-0 border-t border-dashed border-[rgba(205,213,241,0.7)]" />
+                              </div>
+
+                              <div className="relative grid h-full grid-cols-7 gap-3">
+                                {tokenReport.daily_last_7_days.map((day, index) => {
+                                  const ratio =
+                                    maxDailyTokenUsage > 0
+                                      ? day.total_usage.total_tokens / maxDailyTokenUsage
+                                      : 0;
+                                  const height =
+                                    ratio > 0 ? Math.max(6, Math.round(ratio * 100)) : 0;
+                                  const isSelected = index === selectedTrendIndex;
+
+                                  return (
+                                    <button
+                                      key={day.date}
+                                      type="button"
+                                      onMouseEnter={() => setSelectedTrendIndex(index)}
+                                      onFocus={() => setSelectedTrendIndex(index)}
+                                      onClick={() => setSelectedTrendIndex(index)}
+                                      className={`group flex h-full flex-col justify-end rounded-2xl px-2 pb-2 pt-3 text-left transition ${
+                                        isSelected
+                                          ? "bg-[rgba(111,130,255,0.08)]"
+                                          : "hover:bg-[rgba(111,130,255,0.04)]"
+                                      }`}
+                                    >
+                                      <div className="flex-1" />
+                                      <div className="flex h-36 items-end">
+                                        <div className="w-full">
+                                          <div className="mx-auto flex h-32 w-full max-w-[44px] flex-col justify-end overflow-hidden rounded-t-[16px] rounded-b-[12px] bg-[rgba(221,228,248,0.9)] shadow-[inset_0_1px_0_rgba(255,255,255,0.72)]">
+                                            <div
+                                              className={`mt-auto w-full rounded-t-[16px] transition-all ${
+                                                isSelected
+                                                  ? "bg-[linear-gradient(180deg,#8cb2ff_0%,#6a72ff_100%)]"
+                                                  : "bg-[linear-gradient(180deg,#a7c1ff_0%,#7e92ff_100%)]"
+                                              }`}
+                                              style={{ height: `${height}%` }}
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                      <p className="mt-3 text-center text-xs font-medium text-[var(--text-soft)]">
+                                        {formatTokenDayLabel(day.date)}
+                                      </p>
+                                      <p
+                                        className={`mt-1 text-center text-sm font-semibold tabular-nums ${
+                                          isSelected ? "text-[var(--primary-strong)]" : "text-[var(--text-strong)]"
+                                        }`}
+                                        title={formatTokenCount(day.total_usage.total_tokens)}
+                                      >
+                                        {formatCompactTokenCount(day.total_usage.total_tokens)}
+                                      </p>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="option-card rounded-2xl p-5">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                          <h3 className="text-base font-semibold text-[var(--text-strong)]">
+                            최근 세션
+                          </h3>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/70 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
+                            사용 세션 {formatTokenCount(tokenReport.sessions_with_usage)}개
+                          </span>
+                          <button
+                            onClick={() => setIsRecentSessionsExpanded((prev) => !prev)}
+                            disabled={tokenReport.recent_sessions.length === 0}
+                            className="btn-base btn-secondary px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                          >
+                            {isRecentSessionsExpanded ? "접기" : "펴기"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {tokenReport.recent_sessions.length === 0 ? (
+                        <div className="mt-4 rounded-2xl border border-[rgba(186,195,233,0.38)] bg-white/76 p-4 text-sm text-[var(--text-body)]">
+                          아직 토큰이 기록된 로컬 세션이 없습니다.
+                        </div>
+                      ) : !isRecentSessionsExpanded ? (
+                        <div className="mt-4 rounded-2xl border border-[rgba(186,195,233,0.38)] bg-white/76 p-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                            <div className="flex flex-wrap gap-2 text-sm text-[var(--text-body)]">
+                              <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1.5">
+                                최근 목록 {formatTokenCount(tokenReport.recent_sessions.length)}개
+                              </span>
+                              <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/80 px-3 py-1.5">
+                                최신 갱신 {formatTokenTimestamp(latestRecentSessionUpdatedAt)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-4 space-y-3">
+                          {tokenReport.recent_sessions.map((session) => (
+                            <div key={session.session_id} className="rounded-2xl border border-[rgba(186,195,233,0.38)] bg-white/76 p-4">
+                              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                <div className="min-w-0 space-y-2">
+                                  <div className="flex flex-wrap gap-2">
+                                    <span className="rounded-full border border-[rgba(181,193,231,0.54)] bg-white/72 px-3 py-1 text-xs font-medium text-[var(--text-body)]">
+                                      {formatProviderLabel(session.model_provider)}
+                                    </span>
+                                    <span
+                                      className="rounded-full border border-[rgba(103,119,255,0.18)] bg-[rgba(103,119,255,0.08)] px-3 py-1 text-xs font-medium text-[var(--primary-strong)]"
+                                      title={formatTokenCount(session.total_usage.total_tokens)}
+                                    >
+                                      총 {formatCompactTokenCount(session.total_usage.total_tokens)}
+                                    </span>
+                                    {session.last_usage && (
+                                      <span
+                                        className="rounded-full border border-[rgba(255,201,132,0.34)] bg-[rgba(255,243,218,0.82)] px-3 py-1 text-xs font-medium text-[#8a5c23]"
+                                        title={formatTokenCount(session.last_usage.total_tokens)}
+                                      >
+                                        마지막 {formatCompactTokenCount(session.last_usage.total_tokens)}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <p className="truncate text-sm font-medium text-[var(--text-strong)]">
+                                    {formatPathPreview(session.cwd)}
+                                  </p>
+                                  <p className="break-all text-xs text-[var(--text-soft)]">
+                                    {session.cwd ?? "경로 정보 없음"}
+                                  </p>
+                                  <p
+                                    className="text-xs text-[var(--text-body)]"
+                                    title={formatTokenBreakdownLine(session.total_usage)}
+                                  >
+                                    {formatCompactTokenBreakdownLine(session.total_usage)}
+                                  </p>
+                                </div>
+
+                                <div className="shrink-0 space-y-1 text-sm text-[var(--text-body)] lg:text-right">
+                                  <p>마지막 갱신 {formatTokenTimestamp(session.updated_at)}</p>
+                                  <p>시작 {formatTokenTimestamp(session.started_at)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+
             {/* Other Accounts */}
             {liveOtherAccounts.length > 0 && (
               <section>
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <h2 className="section-label">
-                    다른 계정 ({liveOtherAccounts.length})
+                    다른 계정 사용량 ({liveOtherAccounts.length})
                   </h2>
                   <div className="flex items-center gap-2">
                     <label htmlFor="other-accounts-sort" className="text-xs text-[var(--text-body)]">
@@ -961,9 +1376,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                           <path d="M6 8l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </span>
-      <UpdateChecker />
-
-    </div>
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

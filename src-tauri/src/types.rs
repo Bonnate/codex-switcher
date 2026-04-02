@@ -248,6 +248,56 @@ pub struct WarmupSummary {
     pub failed_account_ids: Vec<String>,
 }
 
+/// Token usage counters parsed from local Codex session logs
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsageBreakdown {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// Aggregated token report window
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenReportWindow {
+    pub session_count: usize,
+    pub total_usage: TokenUsageBreakdown,
+}
+
+/// Daily token totals for trend views
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenReportDay {
+    pub date: String,
+    pub total_usage: TokenUsageBreakdown,
+}
+
+/// Recent session entry for the token report
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenReportSession {
+    pub session_id: String,
+    pub cwd: Option<String>,
+    pub model_provider: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub total_usage: TokenUsageBreakdown,
+    pub last_usage: Option<TokenUsageBreakdown>,
+}
+
+/// Summary returned to the frontend for local token usage reporting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenReportSummary {
+    pub sessions_root: String,
+    pub scanned_session_files: usize,
+    pub sessions_with_usage: usize,
+    pub generated_at: DateTime<Utc>,
+    pub today: TokenReportWindow,
+    pub last_7_days: TokenReportWindow,
+    pub last_30_days: TokenReportWindow,
+    pub daily_last_7_days: Vec<TokenReportDay>,
+    pub recent_sessions: Vec<TokenReportSession>,
+}
+
 /// Import summary for account config import operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportAccountsSummary {

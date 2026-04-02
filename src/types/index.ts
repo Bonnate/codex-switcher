@@ -51,6 +51,46 @@ export interface WarmupSummary {
   failed_account_ids: string[];
 }
 
+export interface TokenUsageBreakdown {
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+}
+
+export interface TokenReportWindow {
+  session_count: number;
+  total_usage: TokenUsageBreakdown;
+}
+
+export interface TokenReportDay {
+  date: string;
+  total_usage: TokenUsageBreakdown;
+}
+
+export interface TokenReportSession {
+  session_id: string;
+  cwd: string | null;
+  model_provider: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  total_usage: TokenUsageBreakdown;
+  last_usage: TokenUsageBreakdown | null;
+}
+
+export interface TokenReportSummary {
+  sessions_root: string;
+  scanned_session_files: number;
+  sessions_with_usage: number;
+  generated_at: string;
+  today: TokenReportWindow;
+  last_7_days: TokenReportWindow;
+  last_30_days: TokenReportWindow;
+  daily_last_7_days: TokenReportDay[];
+  recent_sessions: TokenReportSession[];
+}
+
 export interface ImportAccountsSummary {
   total_in_payload: number;
   imported_count: number;
