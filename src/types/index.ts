@@ -119,6 +119,8 @@ export interface UsageSyncStatus {
   device_count: number;
   warning_count: number;
   last_sync_at: string | null;
+  last_pull_performed: boolean;
+  last_push_performed: boolean;
 }
 
 export interface SyncedTokenReportCache {

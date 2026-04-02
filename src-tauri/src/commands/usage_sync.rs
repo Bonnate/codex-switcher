@@ -71,6 +71,12 @@ struct StoredSyncedTokenReportCache {
     warnings: Vec<String>,
 }
 
+#[derive(Debug)]
+struct UsageSyncRuntimeContext {
+    passphrase: String,
+    git_access_token: Option<String>,
+}
+
 #[tauri::command]
 pub async fn get_usage_sync_settings() -> Result<UsageSyncSettings, String> {
     tokio::task::spawn_blocking(load_or_create_usage_sync_settings)
@@ -169,6 +175,22 @@ pub async fn push_usage_sync_repo(
     sync_usage_now_with_git_auth(passphrase, git_access_token).await
 }
 
+#[tauri::command]
+pub async fn auto_pull_usage_sync() -> Result<SyncedTokenReportCache, String> {
+    tokio::task::spawn_blocking(auto_pull_usage_sync_internal)
+        .await
+        .map_err(|error| format!("자동 사용량 Pull 작업이 중단되었습니다: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn auto_sync_usage() -> Result<SyncedTokenReportCache, String> {
+    tokio::task::spawn_blocking(auto_sync_usage_internal)
+        .await
+        .map_err(|error| format!("자동 사용량 동기화 작업이 중단되었습니다: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) fn load_or_create_usage_sync_settings() -> Result<UsageSyncSettings> {
     let path = get_usage_sync_settings_file()?;
     if path.exists() {
@@ -234,6 +256,8 @@ fn build_cached_synced_token_report_response() -> Result<SyncedTokenReportCache>
                 device_count: cache.report.device_count,
                 warning_count: cache.warnings.len(),
                 last_sync_at: Some(cache.synced_at),
+                last_pull_performed: false,
+                last_push_performed: false,
             },
             report: Some(cache.report),
             warnings: cache.warnings,
@@ -246,6 +270,8 @@ fn build_cached_synced_token_report_response() -> Result<SyncedTokenReportCache>
                 device_count: 0,
                 warning_count: 0,
                 last_sync_at: None,
+                last_pull_performed: false,
+                last_push_performed: false,
             },
             report: None,
             warnings: Vec::new(),
@@ -276,9 +302,9 @@ fn refresh_synced_usage_internal(
     let passphrase = validate_usage_sync_passphrase(&passphrase)?;
     let settings = load_or_create_usage_sync_settings()?;
     append_usage_sync_log(&format!(
-        "pull start auth_mode={:?} repo_url={} branch={} token_present={} token_len={}",
+        "pull start auth_mode={:?} repo_configured={} branch={} token_present={} token_len={}",
         settings.git_auth_mode,
-        settings.repo_url,
+        !settings.repo_url.trim().is_empty(),
         settings.branch,
         git_access_token
             .as_deref()
@@ -289,8 +315,8 @@ fn refresh_synced_usage_internal(
     validate_git_auth_session(&settings, git_access_token.as_deref())?;
     ensure_usage_sync_configured(&settings)?;
     ensure_git_available()?;
-    prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
-    rebuild_cached_synced_usage_from_repo(&settings, passphrase)
+    let pull_performed = prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
+    rebuild_cached_synced_usage_from_repo(&settings, passphrase, pull_performed, false)
 }
 
 fn sync_usage_now_internal(
@@ -300,9 +326,9 @@ fn sync_usage_now_internal(
     let passphrase = validate_usage_sync_passphrase(&passphrase)?;
     let settings = load_or_create_usage_sync_settings()?;
     append_usage_sync_log(&format!(
-        "push start auth_mode={:?} repo_url={} branch={} token_present={} token_len={}",
+        "push start auth_mode={:?} repo_configured={} branch={} token_present={} token_len={}",
         settings.git_auth_mode,
-        settings.repo_url,
+        !settings.repo_url.trim().is_empty(),
         settings.branch,
         git_access_token
             .as_deref()
@@ -326,21 +352,117 @@ fn sync_usage_now_internal(
     )?;
     let snapshot = build_usage_sync_snapshot(&settings, &local_report);
 
-    prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
-    write_usage_sync_snapshot_file(&settings, &snapshot, passphrase)?;
-    commit_device_snapshot_if_needed(&settings, git_access_token.as_deref())?;
+    let mut pull_performed = prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
+    let mut push_performed = false;
 
-    if let Err(first_error) = push_usage_sync_branch(&settings, git_access_token.as_deref()) {
-        prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
-        write_usage_sync_snapshot_file(&settings, &snapshot, passphrase)?;
-        commit_device_snapshot_if_needed(&settings, git_access_token.as_deref())?;
-        push_usage_sync_branch(&settings, git_access_token.as_deref()).with_context(|| {
-            format!("원격 저장소에 사용량 스냅샷을 push하지 못했습니다. 첫 시도 오류: {first_error:#}")
-        })?;
+    if write_usage_sync_snapshot_if_changed(&settings, &snapshot, passphrase)? {
+        let committed = commit_device_snapshot_if_needed(&settings, git_access_token.as_deref())?;
+        if committed {
+            match push_usage_sync_branch(&settings, git_access_token.as_deref()) {
+                Ok(()) => {
+                    push_performed = true;
+                }
+                Err(first_error) => {
+                    pull_performed |= prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
+                    if write_usage_sync_snapshot_if_changed(&settings, &snapshot, passphrase)?
+                        && commit_device_snapshot_if_needed(&settings, git_access_token.as_deref())?
+                    {
+                        push_usage_sync_branch(&settings, git_access_token.as_deref())
+                            .with_context(|| {
+                                format!(
+                                    "원격 저장소에 사용량 스냅샷을 push하지 못했습니다. 첫 시도 오류: {first_error:#}"
+                                )
+                            })?;
+                        push_performed = true;
+                    }
+                }
+            }
+        } else {
+            append_usage_sync_log("push skipped because snapshot commit was a no-op");
+        }
+    } else {
+        append_usage_sync_log("push skipped because snapshot content is unchanged");
     }
 
-    prepare_usage_sync_repo(&settings, git_access_token.as_deref())?;
-    rebuild_cached_synced_usage_from_repo(&settings, passphrase)
+    rebuild_cached_synced_usage_from_repo(&settings, passphrase, pull_performed, push_performed)
+}
+
+fn auto_pull_usage_sync_internal() -> Result<SyncedTokenReportCache> {
+    let Some(context) = load_saved_usage_sync_runtime_context("startup-pull")? else {
+        return build_cached_synced_token_report_response();
+    };
+
+    refresh_synced_usage_internal(context.passphrase, context.git_access_token)
+}
+
+fn auto_sync_usage_internal() -> Result<SyncedTokenReportCache> {
+    let Some(context) = load_saved_usage_sync_runtime_context("auto-sync")? else {
+        return build_cached_synced_token_report_response();
+    };
+
+    sync_usage_now_internal(context.passphrase, context.git_access_token)
+}
+
+pub(crate) fn run_usage_sync_shutdown_push_if_needed() -> Result<()> {
+    let Some(context) = load_saved_usage_sync_runtime_context("shutdown-push")? else {
+        return Ok(());
+    };
+
+    let _ = sync_usage_now_internal(context.passphrase, context.git_access_token)?;
+    Ok(())
+}
+
+fn load_saved_usage_sync_runtime_context(
+    reason: &str,
+) -> Result<Option<UsageSyncRuntimeContext>> {
+    let settings = load_or_create_usage_sync_settings()?;
+    if settings.repo_url.trim().is_empty() {
+        append_usage_sync_log(&format!("auto sync skipped ({reason}): repo not configured"));
+        return Ok(None);
+    }
+
+    if check_git_available().is_err() {
+        append_usage_sync_log(&format!("auto sync skipped ({reason}): git unavailable"));
+        return Ok(None);
+    }
+
+    let secrets = load_usage_sync_secure_secrets_internal()?;
+    let Some(passphrase) = secrets
+        .sync_passphrase
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        append_usage_sync_log(&format!("auto sync skipped ({reason}): no saved passphrase"));
+        return Ok(None);
+    };
+
+    let git_access_token = match settings.git_auth_mode {
+        UsageSyncAuthMode::GithubPat => {
+            let Some(token) = secrets
+                .git_access_token
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+            else {
+                append_usage_sync_log(&format!("auto sync skipped ({reason}): no saved PAT"));
+                return Ok(None);
+            };
+            Some(token)
+        }
+        _ => None,
+    };
+
+    if let Err(error) = validate_git_auth_session(&settings, git_access_token.as_deref()) {
+        append_usage_sync_log(&format!(
+            "auto sync skipped ({reason}): invalid auth session ({})",
+            sanitize_usage_sync_log_text(&error.to_string())
+        ));
+        return Ok(None);
+    }
+
+    Ok(Some(UsageSyncRuntimeContext {
+        passphrase,
+        git_access_token,
+    }))
 }
 
 fn normalize_usage_sync_settings(
@@ -491,6 +613,8 @@ fn build_usage_sync_snapshot(
 fn rebuild_cached_synced_usage_from_repo(
     settings: &UsageSyncSettings,
     passphrase: &str,
+    last_pull_performed: bool,
+    last_push_performed: bool,
 ) -> Result<SyncedTokenReportCache> {
     let synced_at = Utc::now();
     let (snapshots, warnings) = read_usage_sync_snapshots(settings, passphrase)?;
@@ -505,6 +629,8 @@ fn rebuild_cached_synced_usage_from_repo(
                 device_count: 0,
                 warning_count: warnings.len(),
                 last_sync_at: Some(synced_at),
+                last_pull_performed,
+                last_push_performed,
             },
             report: None,
             warnings,
@@ -522,6 +648,8 @@ fn rebuild_cached_synced_usage_from_repo(
             device_count: report.device_count,
             warning_count: warnings.len(),
             last_sync_at: Some(synced_at),
+            last_pull_performed,
+            last_push_performed,
         },
         report: Some(report),
         warnings,
@@ -612,7 +740,7 @@ fn merge_usage_sync_snapshots(
 
     Ok(TokenReportSummary {
         source_kind: "synced".to_string(),
-        source_label: "동기화 합산".to_string(),
+        source_label: "모두".to_string(),
         device_count: snapshots.len(),
         last_sync_at: Some(synced_at),
         warning_count: warnings.len(),
@@ -695,7 +823,7 @@ fn read_usage_sync_snapshots(
 fn prepare_usage_sync_repo(
     settings: &UsageSyncSettings,
     git_access_token: Option<&str>,
-) -> Result<()> {
+) -> Result<bool> {
     let repo_dir = get_usage_sync_repo_dir()?;
     if repo_dir.exists() && !repo_dir.join(".git").exists() {
         fs::remove_dir_all(&repo_dir)
@@ -732,7 +860,7 @@ fn prepare_usage_sync_repo(
     )?;
     ensure_usage_sync_remote(settings, git_access_token)?;
 
-    if remote_branch_exists(settings, git_access_token)? {
+    let pull_performed = if remote_branch_exists(settings, git_access_token)? {
         run_git(
             &repo_dir,
             settings,
@@ -751,6 +879,7 @@ fn prepare_usage_sync_repo(
             git_access_token,
             &["checkout", "-B", &settings.branch],
         )?;
+        true
     } else {
         run_git(
             &repo_dir,
@@ -758,9 +887,10 @@ fn prepare_usage_sync_repo(
             git_access_token,
             &["checkout", "-B", &settings.branch],
         )?;
-    }
+        false
+    };
 
-    Ok(())
+    Ok(pull_performed)
 }
 
 fn ensure_usage_sync_remote(
@@ -805,21 +935,54 @@ fn remote_branch_exists(
     Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
 }
 
-fn write_usage_sync_snapshot_file(
+fn write_usage_sync_snapshot_if_changed(
     settings: &UsageSyncSettings,
     snapshot: &UsageSyncSnapshot,
     passphrase: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let repo_dir = get_usage_sync_repo_dir()?;
     let ledger_dir = repo_dir.join(USAGE_LEDGER_DIR_NAME);
     fs::create_dir_all(&ledger_dir)
         .with_context(|| format!("Failed to create usage ledger dir: {}", ledger_dir.display()))?;
 
-    let encrypted = encode_usage_sync_snapshot(snapshot, passphrase)?;
     let file_path = ledger_dir.join(format!("{}.csul", settings.device_id));
+    if file_path.exists() {
+        match fs::read(&file_path) {
+            Ok(existing) => match decode_usage_sync_snapshot(&existing, passphrase) {
+                Ok(existing_snapshot)
+                    if usage_sync_snapshots_match_for_sync(&existing_snapshot, snapshot) =>
+                {
+                    return Ok(false);
+                }
+                Ok(_) => {}
+                Err(error) => append_usage_sync_log(&format!(
+                    "snapshot comparison skipped device={} reason={}",
+                    settings.device_id,
+                    sanitize_usage_sync_log_text(&error.to_string())
+                )),
+            },
+            Err(error) => append_usage_sync_log(&format!(
+                "snapshot comparison read failed device={} reason={}",
+                settings.device_id,
+                sanitize_usage_sync_log_text(&error.to_string())
+            )),
+        }
+    }
+
+    let encrypted = encode_usage_sync_snapshot(snapshot, passphrase)?;
     fs::write(&file_path, encrypted)
         .with_context(|| format!("Failed to write usage snapshot: {}", file_path.display()))?;
-    Ok(())
+    Ok(true)
+}
+
+fn usage_sync_snapshots_match_for_sync(
+    left: &UsageSyncSnapshot,
+    right: &UsageSyncSnapshot,
+) -> bool {
+    let normalized_left = left.clone();
+    let mut normalized_right = right.clone();
+    normalized_right.generated_at = normalized_left.generated_at;
+    normalized_left == normalized_right
 }
 
 fn commit_device_snapshot_if_needed(
@@ -895,7 +1058,7 @@ fn run_git(
     append_usage_sync_log(&format!(
         "git run cwd={} args={} auth_mode={:?} token_present={}",
         repo_dir.display(),
-        args.join(" "),
+        sanitize_git_args_for_log(args),
         settings.git_auth_mode,
         git_access_token
             .map(|value| !value.trim().is_empty())
@@ -915,10 +1078,11 @@ fn run_git(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     append_usage_sync_log(&format!(
-        "git failed args={} stderr={} stdout={}",
-        args.join(" "),
-        sanitize_usage_sync_log_text(stderr.trim()),
-        sanitize_usage_sync_log_text(stdout.trim())
+        "git failed args={} code={:?} stderr_len={} stdout_len={}",
+        sanitize_git_args_for_log(args),
+        output.status.code(),
+        stderr.trim().len(),
+        stdout.trim().len()
     ));
     anyhow::bail!(
         "git {} 실패: {}{}{}",
@@ -942,7 +1106,7 @@ fn run_git_capture(
     append_usage_sync_log(&format!(
         "git capture cwd={} args={} auth_mode={:?} token_present={}",
         repo_dir.display(),
-        args.join(" "),
+        sanitize_git_args_for_log(args),
         settings.git_auth_mode,
         git_access_token
             .map(|value| !value.trim().is_empty())
@@ -960,9 +1124,10 @@ fn run_git_capture(
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         append_usage_sync_log(&format!(
-            "git capture failed args={} stderr={}",
-            args.join(" "),
-            sanitize_usage_sync_log_text(stderr.trim())
+            "git capture failed args={} code={:?} stderr_len={}",
+            sanitize_git_args_for_log(args),
+            output.status.code(),
+            stderr.trim().len()
         ));
         anyhow::bail!("git {} 실패: {}", args.join(" "), stderr.trim());
     }
@@ -1027,7 +1192,30 @@ fn append_usage_sync_log_impl(message: &str) -> Result<()> {
 }
 
 fn sanitize_usage_sync_log_text(value: &str) -> String {
-    value.replace('\r', " ").replace('\n', " ")
+    let single_line = value.replace('\r', " ").replace('\n', " ");
+    let trimmed = single_line.trim();
+    if trimmed.len() > 240 {
+        format!("{}...", &trimmed[..240])
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn sanitize_git_args_for_log(args: &[&str]) -> String {
+    args.iter()
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.starts_with("http://")
+                || trimmed.starts_with("https://")
+                || trimmed.starts_with("git@")
+            {
+                "[remote-url]".to_string()
+            } else {
+                sanitize_usage_sync_log_text(trimmed)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn apply_git_auth_environment(
@@ -1456,6 +1644,18 @@ mod tests {
         assert_eq!(decoded.device_name, snapshot.device_name);
         assert_eq!(decoded.report_timezone, snapshot.report_timezone);
         assert_eq!(decoded.today.total_usage.total_tokens, 100);
+    }
+
+    #[test]
+    fn usage_sync_snapshot_match_ignores_generated_at_only() {
+        let snapshot_a = sample_snapshot("device-a", "Main");
+        let mut snapshot_b = snapshot_a.clone();
+        snapshot_b.generated_at = snapshot_b.generated_at + Duration::minutes(5);
+
+        assert!(usage_sync_snapshots_match_for_sync(&snapshot_a, &snapshot_b));
+
+        snapshot_b.device_name = "Changed".to_string();
+        assert!(!usage_sync_snapshots_match_for_sync(&snapshot_a, &snapshot_b));
     }
 
     #[test]

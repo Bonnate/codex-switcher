@@ -249,7 +249,7 @@ pub struct WarmupSummary {
 }
 
 /// Token usage counters parsed from local Codex session logs
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsageBreakdown {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
@@ -259,21 +259,21 @@ pub struct TokenUsageBreakdown {
 }
 
 /// Aggregated token report window
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenReportWindow {
     pub session_count: usize,
     pub total_usage: TokenUsageBreakdown,
 }
 
 /// Daily token totals for trend views
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenReportDay {
     pub date: String,
     pub total_usage: TokenUsageBreakdown,
 }
 
 /// Recent session entry for the token report
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenReportSession {
     pub session_id: String,
     pub cwd: Option<String>,
@@ -338,7 +338,7 @@ pub struct UsageSyncSettings {
 }
 
 /// One device snapshot written to the sync repo
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageSyncSnapshot {
     pub version: u8,
     pub device_id: String,
@@ -361,6 +361,10 @@ pub struct UsageSyncStatus {
     pub device_count: usize,
     pub warning_count: usize,
     pub last_sync_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub last_pull_performed: bool,
+    #[serde(default)]
+    pub last_push_performed: bool,
 }
 
 /// Cached merged token report from synced device snapshots

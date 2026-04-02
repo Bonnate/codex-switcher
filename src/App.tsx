@@ -24,6 +24,7 @@ import "./App.css";
 const USAGE_ALERT_SETTINGS_KEY = "codex-switcher-usage-alert-settings";
 const PRIVACY_SETTINGS_KEY = "codex-switcher-privacy-settings";
 const DEFAULT_USAGE_SYNC_BRANCH = "main";
+const AUTO_USAGE_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 
 type TokenReportSource = "local" | "synced";
 
@@ -66,6 +67,13 @@ function formatTokenCount(value: number | null | undefined): string {
 
 function formatCompactTokenCount(value: number | null | undefined): string {
   return compactTokenCountFormatter.format(value ?? 0);
+}
+
+function formatMinuteSecondCountdown(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, totalSeconds);
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+  return `${minutes}분 ${seconds}초`;
 }
 
 function formatTokenTimestamp(value: string | null | undefined): string {
@@ -149,17 +157,45 @@ function formatTokenBreakdownLine(usage: TokenUsageBreakdown): string {
   return parts.join(" · ");
 }
 
-function formatCompactTokenBreakdownLine(usage: TokenUsageBreakdown): string {
-  const parts = [
-    `입 ${formatCompactTokenCount(usage.input_tokens)}`,
-    usage.cached_input_tokens > 0 ? `캐 ${formatCompactTokenCount(usage.cached_input_tokens)}` : null,
-    usage.output_tokens > 0 ? `출 ${formatCompactTokenCount(usage.output_tokens)}` : null,
-    usage.reasoning_output_tokens > 0
-      ? `추 ${formatCompactTokenCount(usage.reasoning_output_tokens)}`
-      : null,
-  ].filter(Boolean);
-
-  return parts.join(" · ");
+function getTokenBreakdownIconItems(usage: TokenUsageBreakdown) {
+  return [
+    {
+      key: "input",
+      icon: "↓",
+      label: "입력",
+      value: usage.input_tokens,
+      tooltip: `입력 토큰\n모델에 전달한 프롬프트/컨텍스트 토큰\n현재 ${formatTokenCount(usage.input_tokens)}`,
+      tone: "text-[var(--primary-strong)] bg-[rgba(103,119,255,0.08)] border-[rgba(103,119,255,0.18)]",
+      alwaysShow: true,
+    },
+    {
+      key: "cached",
+      icon: "◌",
+      label: "캐시",
+      value: usage.cached_input_tokens,
+      tooltip: `캐시 입력 토큰\n캐시 적중으로 재사용된 입력 토큰\n현재 ${formatTokenCount(usage.cached_input_tokens)}`,
+      tone: "text-[#3a8b7c] bg-[rgba(132,223,194,0.14)] border-[rgba(132,223,194,0.28)]",
+      alwaysShow: usage.cached_input_tokens > 0,
+    },
+    {
+      key: "output",
+      icon: "↑",
+      label: "출력",
+      value: usage.output_tokens,
+      tooltip: `출력 토큰\n모델이 생성한 응답 토큰\n현재 ${formatTokenCount(usage.output_tokens)}`,
+      tone: "text-[#b86a2d] bg-[rgba(255,201,132,0.16)] border-[rgba(255,201,132,0.28)]",
+      alwaysShow: usage.output_tokens > 0,
+    },
+    {
+      key: "reasoning",
+      icon: "✦",
+      label: "추론",
+      value: usage.reasoning_output_tokens,
+      tooltip: `추론 토큰\n모델 내부 추론에 사용된 토큰\n현재 ${formatTokenCount(usage.reasoning_output_tokens)}`,
+      tone: "text-[#7b5ccf] bg-[rgba(199,185,255,0.18)] border-[rgba(199,185,255,0.32)]",
+      alwaysShow: usage.reasoning_output_tokens > 0,
+    },
+  ].filter((item) => item.alwaysShow);
 }
 
 function App() {
@@ -197,13 +233,15 @@ function App() {
   const [isUsageAlertModalOpen, setIsUsageAlertModalOpen] = useState(false);
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
   const [isUsageSyncModalOpen, setIsUsageSyncModalOpen] = useState(false);
-  const [tokenReportSource, setTokenReportSource] = useState<TokenReportSource>("local");
+  const [tokenReportSource, setTokenReportSource] = useState<TokenReportSource>("synced");
   const [isLocalTokenReportLoading, setIsLocalTokenReportLoading] = useState(false);
   const [localTokenReport, setLocalTokenReport] = useState<TokenReportSummary | null>(null);
   const [localTokenReportError, setLocalTokenReportError] = useState<string | null>(null);
   const [isSyncedTokenReportLoading, setIsSyncedTokenReportLoading] = useState(false);
   const [syncedTokenReportCache, setSyncedTokenReportCache] = useState<SyncedTokenReportCache | null>(null);
   const [syncedTokenReportError, setSyncedTokenReportError] = useState<string | null>(null);
+  const [isUsageSyncBootstrapReady, setIsUsageSyncBootstrapReady] = useState(!isTauriRuntime());
+  const [hasResolvedInitialUsageSync, setHasResolvedInitialUsageSync] = useState(!isTauriRuntime());
   const [usageSyncSettings, setUsageSyncSettings] = useState<UsageSyncSettings>(
     defaultUsageSyncSettings()
   );
@@ -212,6 +250,7 @@ function App() {
   );
   const [usageSyncPassphrase, setUsageSyncPassphrase] = useState("");
   const [usageSyncGitAccessToken, setUsageSyncGitAccessToken] = useState("");
+  const [nextUsageSyncAt, setNextUsageSyncAt] = useState<number | null>(null);
   const [isRecentSessionsExpanded, setIsRecentSessionsExpanded] = useState(false);
   const [selectedTrendIndex, setSelectedTrendIndex] = useState(6);
   const [usageAlertSettings, setUsageAlertSettings] = useState<UsageAlertSettings>(
@@ -253,6 +292,8 @@ function App() {
   const [manageDeleteBusyId, setManageDeleteBusyId] = useState<string | null>(null);
   const optionsMenuRef = useRef<HTMLDivElement | null>(null);
   const notifiedUsageAlertKeysRef = useRef<Set<string>>(new Set());
+  const autoUsageSyncInFlightRef = useRef(false);
+  const usageSyncStartupPullRef = useRef(false);
 
   const toggleMask = (accountId: string) => {
     setMaskedAccounts((prev) => {
@@ -328,6 +369,8 @@ function App() {
         setUsageSyncPassphrase(secrets.sync_passphrase ?? "");
       } catch (err) {
         console.error("Failed to load usage sync settings:", err);
+      } finally {
+        setIsUsageSyncBootstrapReady(true);
       }
     })();
   }, []);
@@ -433,6 +476,16 @@ function App() {
     setTimeout(() => setWarmupToast(null), 2500);
   };
 
+  const applySyncedTokenReportCache = useCallback(
+    (cache: SyncedTokenReportCache | null) => {
+      setSyncedTokenReportCache(cache);
+      if (cache?.report && tokenReportSource === "synced") {
+        setSelectedTrendIndex(Math.max(0, cache.report.daily_last_7_days.length - 1));
+      }
+    },
+    [tokenReportSource]
+  );
+
   const loadLocalTokenReport = async (showErrorToast = true) => {
     try {
       setIsLocalTokenReportLoading(true);
@@ -462,7 +515,7 @@ function App() {
       const cache = await invokeBackend<SyncedTokenReportCache>(
         "get_cached_synced_token_report"
       );
-      setSyncedTokenReportCache(cache);
+      applySyncedTokenReportCache(cache);
       return cache;
     } catch (err) {
       console.error("Failed to load synced token report cache:", err);
@@ -501,12 +554,24 @@ function App() {
             ? usageSyncGitAccessToken
             : undefined,
       });
-      setSyncedTokenReportCache(cache);
-      if (cache.report && tokenReportSource === "synced") {
-        setSelectedTrendIndex(Math.max(0, cache.report.daily_last_7_days.length - 1));
-      }
+      applySyncedTokenReportCache(cache);
       if (showSuccessToast) {
-        showWarmupToast(mode === "push" ? "사용량 스냅샷을 Push했습니다." : "원격 사용량을 Pull했습니다.");
+        if (mode === "push") {
+          showWarmupToast(
+            cache.status.last_push_performed
+              ? "사용량을 동기화했습니다."
+              : "변경이 없어 동기화할 내용이 없습니다."
+          );
+        } else {
+          showWarmupToast(
+            cache.status.last_pull_performed
+              ? "원격 사용량을 Pull했습니다."
+              : "가져올 원격 변경이 없거나 아직 초기화되지 않았습니다."
+          );
+        }
+      }
+      if (mode === "push" && cache.status.configured) {
+        setNextUsageSyncAt(Date.now() + AUTO_USAGE_SYNC_INTERVAL_MS);
       }
       return cache;
     } catch (err) {
@@ -522,6 +587,36 @@ function App() {
       setIsSyncedTokenReportLoading(false);
     }
   };
+
+  const runAutomaticUsageSync = useCallback(
+    async (mode: "startup-pull" | "interval") => {
+      if (!isTauriRuntime()) return null;
+      if (autoUsageSyncInFlightRef.current || isSyncedTokenReportLoading) {
+        return null;
+      }
+
+      autoUsageSyncInFlightRef.current = true;
+      try {
+        setIsSyncedTokenReportLoading(true);
+        const cache = await invokeBackend<SyncedTokenReportCache>(
+          mode === "startup-pull" ? "auto_pull_usage_sync" : "auto_sync_usage"
+        );
+        setSyncedTokenReportError(null);
+        applySyncedTokenReportCache(cache);
+        if (cache.status.configured) {
+          setNextUsageSyncAt(Date.now() + AUTO_USAGE_SYNC_INTERVAL_MS);
+        }
+        return cache;
+      } catch (err) {
+        console.error(`Failed to run automatic usage sync (${mode}):`, err);
+        return null;
+      } finally {
+        setIsSyncedTokenReportLoading(false);
+        autoUsageSyncInFlightRef.current = false;
+      }
+    },
+    [applySyncedTokenReportCache, isSyncedTokenReportLoading]
+  );
 
   const saveUsageAlertSettings = () => {
     const nextSettings: UsageAlertSettings = {
@@ -987,6 +1082,14 @@ function App() {
     return Math.max(0, Math.ceil((nextAutoRefreshAt - refreshCountdownNow) / 1000));
   }, [nextAutoRefreshAt, refreshCountdownNow]);
 
+  const nextUsageSyncInSeconds = useMemo(() => {
+    if (!nextUsageSyncAt) {
+      return Math.ceil(AUTO_USAGE_SYNC_INTERVAL_MS / 1000);
+    }
+
+    return Math.max(0, Math.ceil((nextUsageSyncAt - refreshCountdownNow) / 1000));
+  }, [nextUsageSyncAt, refreshCountdownNow]);
+
   useEffect(() => {
     void loadLocalTokenReport(false);
     if (isTauriRuntime()) {
@@ -995,15 +1098,45 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!isTauriRuntime() || !isUsageSyncBootstrapReady || usageSyncStartupPullRef.current) {
+      return;
+    }
+
+    usageSyncStartupPullRef.current = true;
+    setNextUsageSyncAt(Date.now() + AUTO_USAGE_SYNC_INTERVAL_MS);
+    void runAutomaticUsageSync("startup-pull").finally(() => {
+      setHasResolvedInitialUsageSync(true);
+    });
+  }, [isUsageSyncBootstrapReady, runAutomaticUsageSync]);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || !isUsageSyncBootstrapReady) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setNextUsageSyncAt(Date.now() + AUTO_USAGE_SYNC_INTERVAL_MS);
+      void runAutomaticUsageSync("interval");
+    }, AUTO_USAGE_SYNC_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [isUsageSyncBootstrapReady, runAutomaticUsageSync]);
+
+  useEffect(() => {
     if (!tokenReport || tokenReport.daily_last_7_days.length === 0) return;
     setSelectedTrendIndex(tokenReport.daily_last_7_days.length - 1);
   }, [tokenReport?.generated_at]);
 
   useEffect(() => {
-    if (tokenReportSource === "synced" && !syncedCacheAvailable) {
+    if (
+      tokenReportSource === "synced" &&
+      !syncedCacheAvailable &&
+      hasResolvedInitialUsageSync &&
+      !isSyncedTokenReportLoading
+    ) {
       setTokenReportSource("local");
     }
-  }, [syncedCacheAvailable, tokenReportSource]);
+  }, [hasResolvedInitialUsageSync, isSyncedTokenReportLoading, syncedCacheAvailable, tokenReportSource]);
 
   return (
     <div className="app-shell">
@@ -1323,26 +1456,37 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                           : "text-[var(--text-body)]"
                       }`}
                     >
-                      동기화 합산
+                      모두
                     </button>
                   </div>
                 </div>
-                <button
-                  onClick={() => {
-                    if (tokenReportSource === "synced") {
-                      void refreshSyncedTokenReport("pull");
-                    } else {
-                      void loadLocalTokenReport();
+                <div className="flex flex-col items-end gap-1">
+                  <button
+                    onClick={() => {
+                      if (tokenReportSource === "synced") {
+                        void refreshSyncedTokenReport("push");
+                      } else {
+                        void loadLocalTokenReport();
+                      }
+                    }}
+                    disabled={
+                      isTokenReportLoading ||
+                      (tokenReportSource === "synced" && (!syncedCacheAvailable || !usageSyncPassphrase.trim()))
                     }
-                  }}
-                  disabled={
-                    isTokenReportLoading ||
-                    (tokenReportSource === "synced" && (!syncedCacheAvailable || !usageSyncPassphrase.trim()))
-                  }
-                  className="btn-base btn-secondary px-4 py-2 text-sm font-medium disabled:opacity-50"
-                >
-                  {isTokenReportLoading ? "읽는 중..." : tokenReportSource === "synced" ? "Pull" : "다시 읽기"}
-                </button>
+                    className="btn-base btn-secondary px-4 py-2 text-sm font-medium disabled:opacity-50"
+                  >
+                    {isTokenReportLoading
+                      ? "읽는 중..."
+                      : tokenReportSource === "synced"
+                        ? "동기화"
+                        : "다시 읽기"}
+                  </button>
+                  {tokenReportSource === "synced" && (
+                    <p className="text-[11px] font-medium text-[var(--text-soft)] whitespace-nowrap">
+                      {formatMinuteSecondCountdown(nextUsageSyncInSeconds)} 후 동기화 예정
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-5">
@@ -1437,10 +1581,20 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                           </span>
                         </div>
                         <p
-                          className="mt-4 text-sm text-[var(--text-body)]"
+                          className="mt-4 flex flex-wrap gap-2"
                           title={formatTokenBreakdownLine(entry.summary.total_usage)}
                         >
-                          {formatCompactTokenBreakdownLine(entry.summary.total_usage)}
+                          {getTokenBreakdownIconItems(entry.summary.total_usage).map((item) => (
+                            <span
+                              key={item.key}
+                              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${item.tone}`}
+                              title={item.tooltip}
+                              aria-label={item.tooltip}
+                            >
+                              <span aria-hidden="true">{item.icon}</span>
+                              <span>{formatCompactTokenCount(item.value)}</span>
+                            </span>
+                          ))}
                         </p>
                       </div>
                     ))}
@@ -1637,10 +1791,20 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                                     {session.cwd_preview ?? session.cwd ?? "경로 정보 없음"}
                                   </p>
                                   <p
-                                    className="text-xs text-[var(--text-body)]"
+                                    className="flex flex-wrap gap-2"
                                     title={formatTokenBreakdownLine(session.total_usage)}
                                   >
-                                    {formatCompactTokenBreakdownLine(session.total_usage)}
+                                    {getTokenBreakdownIconItems(session.total_usage).map((item) => (
+                                      <span
+                                        key={item.key}
+                                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium ${item.tone}`}
+                                        title={item.tooltip}
+                                        aria-label={item.tooltip}
+                                      >
+                                        <span aria-hidden="true">{item.icon}</span>
+                                        <span>{formatCompactTokenCount(item.value)}</span>
+                                      </span>
+                                    ))}
                                   </p>
                                 </div>
 
@@ -2071,7 +2235,7 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
                           className="field-shell w-full rounded-xl px-3 py-2 text-sm"
                         />
                         <p className="text-xs text-[var(--text-body)]">
-                          토큰은 저장하지 않고 현재 앱 실행 중에만 사용합니다.
+                          저장하면 토큰은 이 PC의 보안 저장소에 안전하게 보관합니다.
                         </p>
                       </div>
                     </label>

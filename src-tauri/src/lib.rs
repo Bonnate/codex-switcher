@@ -9,11 +9,12 @@ pub mod web;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WebviewWindow, WindowEvent,
+    AppHandle, Manager, RunEvent, WebviewWindow, WindowEvent,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "macos")]
-use tauri::{image::Image, RunEvent};
+use tauri::image::Image;
 
 use commands::{
     add_account_from_file, cancel_login, check_codex_processes, complete_login, delete_account,
@@ -23,14 +24,17 @@ use commands::{
     import_accounts_slim_text, list_accounts, load_usage_sync_secure_secrets, pull_usage_sync_repo,
     refresh_all_accounts_usage, refresh_synced_usage, rename_account,
     save_usage_sync_secure_secrets, save_usage_sync_settings, set_masked_account_ids, start_login, switch_account,
-    sync_usage_now, push_usage_sync_repo, warmup_account, warmup_all_accounts,
+    sync_usage_now, push_usage_sync_repo, warmup_account, warmup_all_accounts, auto_pull_usage_sync,
+    auto_sync_usage,
 };
+use commands::usage_sync::run_usage_sync_shutdown_push_if_needed;
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_MENU_SHOW: &str = "tray_show";
 const TRAY_MENU_HIDE: &str = "tray_hide";
 const TRAY_MENU_QUIT: &str = "tray_quit";
 const TRAY_ID: &str = "main-tray";
+static SHUTDOWN_USAGE_SYNC_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn hide_main_window_to_tray(app: AppHandle) -> Result<(), String> {
@@ -202,6 +206,8 @@ pub fn run() {
             push_usage_sync_repo,
             refresh_synced_usage,
             pull_usage_sync_repo,
+            auto_pull_usage_sync,
+            auto_sync_usage,
             get_cached_synced_token_report,
             refresh_all_accounts_usage,
             warmup_account,
@@ -223,6 +229,12 @@ pub fn run() {
         #[cfg(target_os = "macos")]
         if let RunEvent::Reopen { .. } = event {
             let _ = show_main_window(app);
+        }
+
+        if let RunEvent::ExitRequested { .. } = event {
+            if !SHUTDOWN_USAGE_SYNC_ATTEMPTED.swap(true, Ordering::SeqCst) {
+                let _ = run_usage_sync_shutdown_push_if_needed();
+            }
         }
     });
 }
