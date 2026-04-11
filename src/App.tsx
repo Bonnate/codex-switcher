@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { USAGE_AUTO_REFRESH_INTERVAL_MS, useAccounts } from "./hooks/useAccounts";
-import { AccountCard, AddAccountModal, UpdateChecker } from "./components";
+import { AccountCard, AddAccountModal } from "./components";
 import { getExhaustedRateLimits } from "./components/UsageBar";
 import type {
+  AccountWithUsage,
   CodexProcessInfo,
   SyncedTokenReportCache,
   TokenReportSummary,
@@ -39,6 +40,17 @@ type PrivacySettings = {
   showCredits: boolean;
   showMaskToggle: boolean;
   showPlanBadge: boolean;
+};
+
+type AccountManagerStatusKind = "healthy" | "payment_required" | "auth_expired" | "error" | "checking";
+
+type AccountManagerStatus = {
+  kind: AccountManagerStatusKind;
+  label: string;
+  summary: string;
+  detail: string | null;
+  badgeClassName: string;
+  textClassName: string;
 };
 
 const DEFAULT_USAGE_ALERT_SETTINGS: UsageAlertSettings = {
@@ -111,6 +123,93 @@ function formatProviderLabel(value: string | null | undefined): string {
   if (!value) return "provider";
   if (value === "openai") return "OpenAI";
   return value;
+}
+
+function deriveAccountManagerStatus(account: AccountWithUsage): AccountManagerStatus {
+  const rawError = account.usage?.error?.trim();
+
+  if (account.usageLoading && !account.usage) {
+    return {
+      kind: "checking",
+      label: "확인 중",
+      summary: "상태 확인 중",
+      detail: null,
+      badgeClassName:
+        "border-[rgba(143,167,214,0.28)] bg-[rgba(237,243,255,0.92)] text-[var(--text-body)]",
+      textClassName: "text-[var(--text-body)]",
+    };
+  }
+
+  if (!account.usage) {
+    return {
+      kind: "checking",
+      label: "미확인",
+      summary: "아직 사용량 상태를 읽지 않았습니다",
+      detail: null,
+      badgeClassName:
+        "border-[rgba(143,167,214,0.28)] bg-[rgba(237,243,255,0.92)] text-[var(--text-body)]",
+      textClassName: "text-[var(--text-body)]",
+    };
+  }
+
+  if (!rawError) {
+    return {
+      kind: "healthy",
+      label: "정상",
+      summary: "사용 가능",
+      detail: null,
+      badgeClassName:
+        "border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.2)] text-[#2f8d76]",
+      textClassName: "text-[#2f8d76]",
+    };
+  }
+
+  const normalizedError = rawError.toLowerCase();
+  if (
+    normalizedError.includes("402") ||
+    normalizedError.includes("payment required") ||
+    normalizedError.includes("insufficient credits") ||
+    normalizedError.includes("credit")
+  ) {
+    return {
+      kind: "payment_required",
+      label: "결제 필요",
+      summary: "만료 또는 결제 이슈",
+      detail: rawError,
+      badgeClassName:
+        "border-[rgba(255,189,102,0.34)] bg-[rgba(255,235,205,0.88)] text-[#b86a2d]",
+      textClassName: "text-[#b86a2d]",
+    };
+  }
+
+  if (
+    normalizedError.includes("401") ||
+    normalizedError.includes("unauthorized") ||
+    normalizedError.includes("invalid_grant") ||
+    normalizedError.includes("refresh token") ||
+    normalizedError.includes("token refresh") ||
+    normalizedError.includes("missing refresh token")
+  ) {
+    return {
+      kind: "auth_expired",
+      label: "인증 만료",
+      summary: "다시 로그인 필요",
+      detail: rawError,
+      badgeClassName:
+        "border-[rgba(232,125,150,0.28)] bg-[rgba(255,232,238,0.88)] text-[#c25778]",
+      textClassName: "text-[#c25778]",
+    };
+  }
+
+  return {
+    kind: "error",
+    label: "오류",
+    summary: "상태 확인 실패",
+    detail: rawError,
+    badgeClassName:
+      "border-[rgba(196,162,255,0.28)] bg-[rgba(241,235,255,0.88)] text-[#7b5ccf]",
+    textClassName: "text-[#7b5ccf]",
+  };
 }
 
 function defaultUsageSyncSettings(): UsageSyncSettings {
@@ -1090,6 +1189,31 @@ function App() {
     return Math.max(0, Math.ceil((nextUsageSyncAt - refreshCountdownNow) / 1000));
   }, [nextUsageSyncAt, refreshCountdownNow]);
 
+  const managedAccounts = useMemo(
+    () =>
+      accounts.map((account) => ({
+        account,
+        status: deriveAccountManagerStatus(account),
+      })),
+    [accounts]
+  );
+
+  const managedProblemAccounts = useMemo(
+    () =>
+      managedAccounts.filter(
+        ({ status }) => status.kind === "payment_required" || status.kind === "auth_expired" || status.kind === "error"
+      ),
+    [managedAccounts]
+  );
+
+  const managedHealthyAccounts = useMemo(
+    () =>
+      managedAccounts.filter(
+        ({ status }) => status.kind === "healthy" || status.kind === "checking"
+      ),
+    [managedAccounts]
+  );
+
   useEffect(() => {
     void loadLocalTokenReport(false);
     if (isTauriRuntime()) {
@@ -1354,8 +1478,6 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
           </div>
         </div>
       </header>
-
-      <UpdateChecker />
 
       {/* Main Content */}
       <main className="app-content mx-auto max-w-6xl px-6 py-8">
@@ -1986,63 +2108,168 @@ Windows/macOS 시스템 알림을 띄우는 기준을 설정합니다."
             </div>
 
             <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
-              {accounts.map((account) => {
-                const isConfirming = manageDeleteConfirmId === account.id;
-                const isDeleting = manageDeleteBusyId === account.id;
-
-                return (
-                  <div
-                    key={account.id}
-                    className="option-card flex items-center justify-between gap-4 rounded-2xl px-4 py-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-medium text-[var(--text-strong)]">
-                          {account.name}
-                        </p>
-                        {account.is_active && (
-                          <span className="inline-flex items-center rounded-full border border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.2)] px-2 py-0.5 text-[11px] font-medium text-[#2f8d76]">
-                            현재 사용 중
-                          </span>
-                        )}
-                      </div>
-                      {account.email && (
-                        <p className="truncate text-sm text-[var(--text-body)]">{account.email}</p>
-                      )}
-                    </div>
-
-                    <div className="shrink-0 flex items-center gap-2">
-                      {isConfirming ? (
-                        <>
-                          <button
-                            onClick={() => setManageDeleteConfirmId(null)}
-                            disabled={isDeleting}
-                            className="btn-base btn-secondary px-3 py-2 text-sm disabled:opacity-50"
-                          >
-                            취소
-                          </button>
-                          <button
-                            onClick={() => {
-                              void handleManagedDelete(account.id);
-                            }}
-                            disabled={isDeleting}
-                            className="btn-base btn-danger px-3 py-2 text-sm disabled:opacity-50"
-                          >
-                            {isDeleting ? "제거 중..." : "정말 제거"}
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          onClick={() => setManageDeleteConfirmId(account.id)}
-                          className="btn-base btn-danger px-3 py-2 text-sm"
-                        >
-                          제거
-                        </button>
-                      )}
-                    </div>
+              {managedProblemAccounts.length > 0 && (
+                <div className="space-y-3">
+                  <div className="px-1">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#b86a2d]">
+                      문제 계정
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--text-body)]">
+                      결제 이슈, 인증 만료, 사용량 조회 오류가 있는 계정입니다.
+                    </p>
                   </div>
-                );
-              })}
+                  {managedProblemAccounts.map(({ account, status }) => {
+                    const isConfirming = manageDeleteConfirmId === account.id;
+                    const isDeleting = manageDeleteBusyId === account.id;
+
+                    return (
+                      <div
+                        key={account.id}
+                        className="option-card flex items-start justify-between gap-4 rounded-2xl px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-medium text-[var(--text-strong)]">
+                              {account.name}
+                            </p>
+                            {account.is_active && (
+                              <span className="inline-flex items-center rounded-full border border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.2)] px-2 py-0.5 text-[11px] font-medium text-[#2f8d76]">
+                                현재 사용 중
+                              </span>
+                            )}
+                          </div>
+                          {account.email && (
+                            <p className="truncate text-sm text-[var(--text-body)]">{account.email}</p>
+                          )}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span
+                              className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${status.badgeClassName}`}
+                            >
+                              {status.label}
+                            </span>
+                            <span className={`text-xs font-medium ${status.textClassName}`}>
+                              {status.summary}
+                            </span>
+                          </div>
+                          {status.detail && (
+                            <p className="mt-1 break-words text-xs text-[var(--text-body)]">
+                              {status.detail}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="shrink-0 flex items-center gap-2">
+                          {isConfirming ? (
+                            <>
+                              <button
+                                onClick={() => setManageDeleteConfirmId(null)}
+                                disabled={isDeleting}
+                                className="btn-base btn-secondary px-3 py-2 text-sm disabled:opacity-50"
+                              >
+                                취소
+                              </button>
+                              <button
+                                onClick={() => {
+                                  void handleManagedDelete(account.id);
+                                }}
+                                disabled={isDeleting}
+                                className="btn-base btn-danger px-3 py-2 text-sm disabled:opacity-50"
+                              >
+                                {isDeleting ? "제거 중..." : "정말 제거"}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => setManageDeleteConfirmId(account.id)}
+                              className="btn-base btn-danger px-3 py-2 text-sm"
+                            >
+                              제거
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {managedHealthyAccounts.length > 0 && (
+                <div className="space-y-3">
+                  {managedProblemAccounts.length > 0 && <div className="soft-divider border-t" />}
+                  <div className="px-1">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-soft)]">
+                      정상 / 확인 중
+                    </p>
+                  </div>
+                  {managedHealthyAccounts.map(({ account, status }) => {
+                    const isConfirming = manageDeleteConfirmId === account.id;
+                    const isDeleting = manageDeleteBusyId === account.id;
+
+                    return (
+                      <div
+                        key={account.id}
+                        className="option-card flex items-start justify-between gap-4 rounded-2xl px-4 py-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-sm font-medium text-[var(--text-strong)]">
+                              {account.name}
+                            </p>
+                            {account.is_active && (
+                              <span className="inline-flex items-center rounded-full border border-[rgba(132,223,194,0.34)] bg-[rgba(132,223,194,0.2)] px-2 py-0.5 text-[11px] font-medium text-[#2f8d76]">
+                                현재 사용 중
+                              </span>
+                            )}
+                          </div>
+                          {account.email && (
+                            <p className="truncate text-sm text-[var(--text-body)]">{account.email}</p>
+                          )}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span
+                              className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold ${status.badgeClassName}`}
+                            >
+                              {status.label}
+                            </span>
+                            <span className={`text-xs font-medium ${status.textClassName}`}>
+                              {status.summary}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 flex items-center gap-2">
+                          {isConfirming ? (
+                            <>
+                              <button
+                                onClick={() => setManageDeleteConfirmId(null)}
+                                disabled={isDeleting}
+                                className="btn-base btn-secondary px-3 py-2 text-sm disabled:opacity-50"
+                              >
+                                취소
+                              </button>
+                              <button
+                                onClick={() => {
+                                  void handleManagedDelete(account.id);
+                                }}
+                                disabled={isDeleting}
+                                className="btn-base btn-danger px-3 py-2 text-sm disabled:opacity-50"
+                              >
+                                {isDeleting ? "제거 중..." : "정말 제거"}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              onClick={() => setManageDeleteConfirmId(account.id)}
+                              className="btn-base btn-danger px-3 py-2 text-sm"
+                            >
+                              제거
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

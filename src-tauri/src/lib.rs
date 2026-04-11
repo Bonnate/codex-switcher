@@ -169,9 +169,6 @@ pub fn run() {
         })
         .setup(|app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
-            #[cfg(desktop)]
             setup_tray(app)?;
             Ok(())
         })
