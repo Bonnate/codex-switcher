@@ -40,6 +40,12 @@ pub struct StoredAccount {
     pub email: Option<String>,
     /// Plan type: free, plus, pro, team, business, enterprise, edu
     pub plan_type: Option<String>,
+    /// Optional expiration date set by the user (YYYY-MM-DD)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_on: Option<String>,
+    /// Lower numbers are used first by the load balancer
+    #[serde(default)]
+    pub load_balancer_priority: u32,
     /// Authentication mode
     pub auth_mode: AuthMode,
     /// Authentication credentials
@@ -58,6 +64,8 @@ impl StoredAccount {
             name,
             email: None,
             plan_type: None,
+            expires_on: None,
+            load_balancer_priority: 0,
             auth_mode: AuthMode::ApiKey,
             auth_data: AuthData::ApiKey { key: api_key },
             created_at: Utc::now(),
@@ -80,6 +88,8 @@ impl StoredAccount {
             name,
             email,
             plan_type,
+            expires_on: None,
+            load_balancer_priority: 0,
             auth_mode: AuthMode::ChatGPT,
             auth_data: AuthData::ChatGPT {
                 id_token,
@@ -168,6 +178,8 @@ pub struct AccountInfo {
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
+    pub expires_on: Option<String>,
+    pub load_balancer_priority: u32,
     pub auth_mode: AuthMode,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
@@ -181,6 +193,8 @@ impl AccountInfo {
             name: account.name.clone(),
             email: account.email.clone(),
             plan_type: account.plan_type.clone(),
+            expires_on: account.expires_on.clone(),
+            load_balancer_priority: account.load_balancer_priority,
             auth_mode: account.auth_mode,
             is_active: active_id == Some(&account.id),
             created_at: account.created_at,
@@ -266,6 +280,78 @@ pub struct OAuthLoginInfo {
     pub auth_url: String,
     /// The local callback port
     pub callback_port: u16,
+}
+
+/// Account selection strategy for the built-in load balancer
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadBalancingStrategy {
+    RoundRobin,
+    HighestRemaining,
+}
+
+impl Default for LoadBalancingStrategy {
+    fn default() -> Self {
+        Self::HighestRemaining
+    }
+}
+
+/// Persisted settings for the built-in load balancer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadBalancerSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_load_balancer_host")]
+    pub host: String,
+    #[serde(default = "default_load_balancer_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub strategy: LoadBalancingStrategy,
+    #[serde(default = "default_apply_codex_config")]
+    pub apply_codex_config: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_model_provider: Option<String>,
+}
+
+impl Default for LoadBalancerSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_load_balancer_host(),
+            port: default_load_balancer_port(),
+            strategy: LoadBalancingStrategy::HighestRemaining,
+            apply_codex_config: default_apply_codex_config(),
+            previous_model_provider: None,
+        }
+    }
+}
+
+/// Runtime status returned to the frontend for the built-in load balancer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadBalancerStatus {
+    pub settings: LoadBalancerSettings,
+    pub running: bool,
+    pub endpoint_url: String,
+    pub eligible_account_count: usize,
+    pub eligible_account_names: Vec<String>,
+    pub active_priority: Option<u32>,
+    pub deferred_account_count: usize,
+    pub codex_config_applied: bool,
+    pub requests_proxied: u64,
+    pub last_account_name: Option<String>,
+    pub last_error: Option<String>,
+}
+
+fn default_load_balancer_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_load_balancer_port() -> u16 {
+    2461
+}
+
+fn default_apply_codex_config() -> bool {
+    true
 }
 
 // ============================================================================

@@ -7,6 +7,8 @@ export interface AccountInfo {
   name: string;
   email: string | null;
   plan_type: string | null;
+  expires_on: string | null;
+  load_balancer_priority: number;
   auth_mode: AuthMode;
   is_active: boolean;
   created_at: string;
@@ -55,4 +57,28 @@ export interface ImportAccountsSummary {
   total_in_payload: number;
   imported_count: number;
   skipped_count: number;
+}
+
+export type LoadBalancingStrategy = "round_robin" | "highest_remaining";
+
+export interface LoadBalancerSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  strategy: LoadBalancingStrategy;
+  apply_codex_config: boolean;
+}
+
+export interface LoadBalancerStatus {
+  settings: LoadBalancerSettings;
+  running: boolean;
+  endpoint_url: string;
+  eligible_account_count: number;
+  eligible_account_names: string[];
+  active_priority: number | null;
+  deferred_account_count: number;
+  codex_config_applied: boolean;
+  requests_proxied: number;
+  last_account_name: string | null;
+  last_error: string | null;
 }

@@ -14,6 +14,7 @@ interface AccountCardProps {
   warmingUp?: boolean;
   masked?: boolean;
   onToggleMask?: () => void;
+  loadBalancerMode?: boolean;
 }
 
 function formatLastRefresh(date: Date | null): string {
@@ -50,6 +51,7 @@ export function AccountCard({
   warmingUp,
   masked = false,
   onToggleMask,
+  loadBalancerMode = false,
 }: AccountCardProps) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(
@@ -116,21 +118,30 @@ export function AccountCard({
 
   const planKey = account.plan_type?.toLowerCase() || "api_key";
   const planColorClass = planColors[planKey] || planColors.free;
-
+  const expirationBadge = (() => {
+    if (!account.expires_on) return null;
+    const target = new Date(`${account.expires_on}T00:00:00`);
+    if (Number.isNaN(target.getTime())) return null;
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const diffDays = Math.round((target.getTime() - todayStart.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays > 0) return `${diffDays}일 후 만료`;
+    if (diffDays === 0) return "오늘 만료";
+    return "만료됨";
+  })();
 
   return (
     <div
       className={`relative rounded-xl border p-5 transition-all duration-200 ${
-        account.is_active
+        account.is_active && !loadBalancerMode
           ? "bg-white border-emerald-400 shadow-sm"
           : "bg-white border-gray-200 hover:border-gray-300"
       }`}
     >
-      {/* Header */}
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex items-start justify-between mb-3 gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            {account.is_active && (
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            {account.is_active && !loadBalancerMode && (
               <span className="flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-green-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
@@ -159,6 +170,11 @@ export function AccountCard({
                 <BlurredText blur={masked}>{account.name}</BlurredText>
               </h3>
             )}
+            {expirationBadge && (
+              <span className="px-2 py-0.5 text-[11px] rounded-full border border-amber-200 bg-amber-50 text-amber-700">
+                [{expirationBadge}]
+              </span>
+            )}
           </div>
           {account.email && (
             <p className="text-sm text-gray-500 truncate">
@@ -167,8 +183,7 @@ export function AccountCard({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* Eye toggle */}
+        <div className="flex items-center gap-2 shrink-0">
           {onToggleMask && (
             <button
               onClick={onToggleMask}
@@ -187,47 +202,43 @@ export function AccountCard({
               )}
             </button>
           )}
-          {/* Plan badge */}
-          <span
-            className={`px-2.5 py-1 text-xs font-medium rounded-full border ${planColorClass}`}
-          >
+          <span className={`px-2.5 py-1 text-xs font-medium rounded-full border ${planColorClass}`}>
             {planDisplay}
           </span>
         </div>
       </div>
 
-      {/* Usage */}
       <div className="mb-3">
         <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
       </div>
 
-      {/* Last refresh time */}
       <div className="text-xs text-gray-400 mb-3">
         Last updated: {formatLastRefresh(lastRefresh)}
       </div>
 
-      {/* Actions */}
       <div className="flex gap-2">
-        {account.is_active ? (
-          <button
-            disabled
-            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 text-gray-500 border border-gray-200 cursor-default"
-          >
-            ✓ Active
-          </button>
-        ) : (
-          <button
-            onClick={onSwitch}
-            disabled={switching || switchDisabled}
-            className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
-              switchDisabled
-                ? "bg-gray-200 text-gray-400 cursor-not-allowed"
-                : "bg-gray-900 hover:bg-gray-800 text-white"
-            }`}
-            title={switchDisabled ? "Close all Codex processes first" : undefined}
-          >
-            {switching ? "Switching..." : switchDisabled ? "Codex Running" : "Switch"}
-          </button>
+        {!loadBalancerMode && (
+          account.is_active ? (
+            <button
+              disabled
+              className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 text-gray-500 border border-gray-200 cursor-default"
+            >
+              ✓ Active
+            </button>
+          ) : (
+            <button
+              onClick={onSwitch}
+              disabled={switching || switchDisabled}
+              className={`flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
+                switchDisabled
+                  ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                  : "bg-gray-900 hover:bg-gray-800 text-white"
+              }`}
+              title={switchDisabled ? "Close all Codex processes first" : undefined}
+            >
+              {switching ? "Switching..." : switchDisabled ? "Codex Running" : "Switch"}
+            </button>
+          )
         )}
         <button
           onClick={() => {

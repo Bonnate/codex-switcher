@@ -188,6 +188,38 @@ pub fn update_account_metadata(
     Ok(())
 }
 
+/// Set or clear an account expiration date (YYYY-MM-DD)
+pub fn set_account_expiration(account_id: &str, expires_on: Option<String>) -> Result<()> {
+    let mut store = load_accounts()?;
+
+    let account = store
+        .accounts
+        .iter_mut()
+        .find(|a| a.id == account_id)
+        .context("Account not found")?;
+
+    account.expires_on = expires_on;
+
+    save_accounts(&store)?;
+    Ok(())
+}
+
+/// Set a per-account load balancer priority. Lower numbers are used first.
+pub fn set_account_load_balancer_priority(account_id: &str, priority: u32) -> Result<()> {
+    let mut store = load_accounts()?;
+
+    let account = store
+        .accounts
+        .iter_mut()
+        .find(|a| a.id == account_id)
+        .context("Account not found")?;
+
+    account.load_balancer_priority = priority;
+
+    save_accounts(&store)?;
+    Ok(())
+}
+
 /// Update ChatGPT OAuth tokens for an account and return the updated account.
 pub fn update_account_chatgpt_tokens(
     account_id: &str,

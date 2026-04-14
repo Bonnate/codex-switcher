@@ -8,6 +8,7 @@ use crate::auth::{
 use crate::types::{AccountInfo, AccountsStore, AuthData, ImportAccountsSummary, StoredAccount};
 
 use anyhow::Context;
+use chrono::NaiveDate;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
@@ -178,6 +179,42 @@ pub async fn delete_account(account_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn rename_account(account_id: String, new_name: String) -> Result<(), String> {
     crate::auth::storage::update_account_metadata(&account_id, Some(new_name), None, None)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Set or clear an account expiration date.
+#[tauri::command]
+pub async fn set_account_expiration(
+    account_id: String,
+    expires_on: Option<String>,
+) -> Result<(), String> {
+    let normalized = match expires_on {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                let parsed = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+                    .map_err(|_| "만료일자는 YYYY-MM-DD 형식이어야 합니다.".to_string())?;
+                Some(parsed.format("%Y-%m-%d").to_string())
+            }
+        }
+        None => None,
+    };
+
+    crate::auth::storage::set_account_expiration(&account_id, normalized)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Set a per-account load balancer priority. Lower numbers are used first.
+#[tauri::command]
+pub async fn set_account_load_balancer_priority(
+    account_id: String,
+    priority: u32,
+) -> Result<(), String> {
+    crate::auth::storage::set_account_load_balancer_priority(&account_id, priority)
         .map_err(|e| e.to_string())?;
     Ok(())
 }

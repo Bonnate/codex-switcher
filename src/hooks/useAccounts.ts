@@ -230,6 +230,30 @@ export function useAccounts() {
     [loadAccounts]
   );
 
+  const setAccountExpiration = useCallback(
+    async (accountId: string, expiresOn: string | null) => {
+      try {
+        await invokeBackend("set_account_expiration", { accountId, expiresOn });
+        await loadAccounts(true);
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts]
+  );
+
+  const setAccountLoadBalancerPriority = useCallback(
+    async (accountId: string, priority: number) => {
+      try {
+        await invokeBackend("set_account_load_balancer_priority", { accountId, priority });
+        await loadAccounts(true);
+      } catch (err) {
+        throw err;
+      }
+    },
+    [loadAccounts]
+  );
+
   const importFromFile = useCallback(
     async (source: FileSource, name: string) => {
       try {
@@ -374,6 +398,8 @@ export function useAccounts() {
     switchAccount,
     deleteAccount,
     renameAccount,
+    setAccountExpiration,
+    setAccountLoadBalancerPriority,
     importFromFile,
     exportAccountsSlimText,
     importAccountsSlimText,

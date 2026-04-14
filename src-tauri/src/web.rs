@@ -12,10 +12,12 @@ use tokio::runtime::Runtime;
 use crate::commands::{
     add_account_from_auth_json_text, add_account_from_file, cancel_login, check_codex_processes,
     complete_login, delete_account, export_accounts_full_encrypted_bytes,
-    export_accounts_slim_text, get_active_account_info, get_masked_account_ids, get_usage,
-    import_accounts_full_encrypted_bytes, import_accounts_slim_text, list_accounts,
-    refresh_all_accounts_usage, rename_account, set_masked_account_ids, start_login,
-    switch_account, warmup_account, warmup_all_accounts,
+    export_accounts_slim_text, get_active_account_info, get_load_balancer_status,
+    get_masked_account_ids, get_usage, import_accounts_full_encrypted_bytes,
+    import_accounts_slim_text, list_accounts, refresh_all_accounts_usage, rename_account,
+    save_load_balancer_settings, set_account_expiration,
+    set_account_load_balancer_priority, set_masked_account_ids, start_login, switch_account,
+    warmup_account, warmup_all_accounts,
 };
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +34,23 @@ struct RenameAccountArgs {
     account_id: String,
     #[serde(alias = "new_name")]
     new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetAccountExpirationArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    #[serde(alias = "expires_on")]
+    expires_on: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetAccountLoadBalancerPriorityArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    priority: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +81,11 @@ struct UploadAuthJsonArgs {
 struct UploadEncryptedArgs {
     #[serde(alias = "contents_base64")]
     contents_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveLoadBalancerArgs {
+    settings: crate::types::LoadBalancerSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +165,11 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(get_usage(args.account_id).await?)
         }
+        "get_load_balancer_status" => to_json(get_load_balancer_status().await?),
+        "save_load_balancer_settings" => {
+            let args: SaveLoadBalancerArgs = parse_args(payload)?;
+            to_json(save_load_balancer_settings(args.settings).await?)
+        }
         "refresh_all_accounts_usage" => to_json(refresh_all_accounts_usage().await?),
         "warmup_account" => {
             let args: AccountIdArgs = parse_args(payload)?;
@@ -158,6 +187,14 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "rename_account" => {
             let args: RenameAccountArgs = parse_args(payload)?;
             to_json(rename_account(args.account_id, args.new_name).await?)
+        }
+        "set_account_expiration" => {
+            let args: SetAccountExpirationArgs = parse_args(payload)?;
+            to_json(set_account_expiration(args.account_id, args.expires_on).await?)
+        }
+        "set_account_load_balancer_priority" => {
+            let args: SetAccountLoadBalancerPriorityArgs = parse_args(payload)?;
+            to_json(set_account_load_balancer_priority(args.account_id, args.priority).await?)
         }
         "start_login" => {
             let args: LoginArgs = parse_args(payload)?;

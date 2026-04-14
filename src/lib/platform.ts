@@ -43,6 +43,24 @@ export async function openExternalUrl(url: string): Promise<void> {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
+export async function sendSystemNotification(title: string, body: string): Promise<boolean> {
+  if (typeof window === "undefined" || typeof Notification === "undefined") {
+    return false;
+  }
+
+  let permission = Notification.permission;
+  if (permission === "default") {
+    permission = await Notification.requestPermission();
+  }
+
+  if (permission !== "granted") {
+    return false;
+  }
+
+  new Notification(title, { body });
+  return true;
+}
+
 export async function pickAuthJsonFile(): Promise<FileSource | null> {
   if (isTauriRuntime()) {
     const { open } = await import("@tauri-apps/plugin-dialog");

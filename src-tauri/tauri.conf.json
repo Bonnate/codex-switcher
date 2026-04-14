@@ -4,9 +4,9 @@
   "version": "0.1.7",
   "identifier": "com.lampese.codex-switcher",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "node ./scripts/frontend-dev.mjs",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "node ./scripts/frontend-build.mjs",
     "frontendDist": "../dist"
   },
   "app": {
